@@ -8,6 +8,7 @@ import json
 import mimetypes
 import os
 import re
+import socket
 import subprocess
 import threading
 import time
@@ -18,9 +19,16 @@ from typing import Any, Optional
 from urllib.parse import urlparse, parse_qs
 
 # ─── Configuration ───────────────────────────────────────────────────────────
-BIND_HOST = "0.0.0.0"
-BIND_PORT = 8080
-INTERNAL_IP = "192.168.57.17"
+import argparse
+
+_parser = argparse.ArgumentParser(description="Claude Glean — workspace dashboard")
+_parser.add_argument("-p", "--port", type=int, default=8080, help="Port to bind (default: 8080)")
+_parser.add_argument("--host", default="0.0.0.0", help="Host to bind (default: 0.0.0.0)")
+_args = _parser.parse_args()
+
+BIND_HOST = _args.host
+BIND_PORT = _args.port
+INTERNAL_IP = socket.gethostbyname(socket.gethostname())
 
 CLAUDE_DIR = Path.home() / ".claude"
 CLAUDE_JSON = Path.home() / ".claude.json"
