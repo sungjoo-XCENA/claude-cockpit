@@ -1,4 +1,4 @@
-# claude-cockpit
+# claude-glean
 
 Real-time Claude Code workspace monitor. A local web dashboard that gives you a single-screen overview of all your Claude Code sessions, instructions, skills, agents, connectors, hooks, plugins, forks, and projects.
 
@@ -24,7 +24,7 @@ If you run multiple Claude Code sessions across different repos, you've probably
 - **"Where was that conversation I forked?"** — fork history buried in jsonl files
 - **"Is my context window getting full?"** — no visibility without typing `/context`
 
-Claude Cockpit solves this by scanning `~/.claude/` and presenting everything in one dashboard.
+Claude Glean solves this by scanning `~/.claude/` and presenting everything in one dashboard.
 
 ## Features
 
