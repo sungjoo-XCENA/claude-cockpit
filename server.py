@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Claude Cockpit — Claude Code 워크스페이스 모니터링 대시보드 백엔드
-Python 3.9+ / 외부 의존성 없음 (stdlib only)
+Claude Glean — Claude Code workspace monitoring dashboard backend
+Python 3.9+ / no external dependencies (stdlib only)
 """
 
 import json
@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Any, Optional
 from urllib.parse import urlparse, parse_qs
 
-# ─── 설정 ────────────────────────────────────────────────────────────────────
+# ─── Configuration ───────────────────────────────────────────────────────────
 BIND_HOST = "0.0.0.0"
 BIND_PORT = 8080
 INTERNAL_IP = "192.168.57.17"
@@ -26,13 +26,13 @@ CLAUDE_DIR = Path.home() / ".claude"
 CLAUDE_JSON = Path.home() / ".claude.json"
 DIST_DIR = Path(__file__).parent / "dist"
 
-SSE_INTERVAL = 5  # 초
+SSE_INTERVAL = 5  # seconds
 
 
-# ─── 유틸리티 ────────────────────────────────────────────────────────────────
+# ─── Utilities ───────────────────────────────────────────────────────────────
 
 def read_json(path: Path) -> Optional[Any]:
-    """JSON 파일을 안전하게 읽기. 실패 시 None 반환."""
+    """Safely read a JSON file. Returns None on failure."""
     try:
         with open(path, "r", encoding="utf-8") as f:
             return json.load(f)
@@ -41,7 +41,7 @@ def read_json(path: Path) -> Optional[Any]:
 
 
 def read_text(path: Path, max_chars: int = 0) -> Optional[str]:
-    """텍스트 파일을 안전하게 읽기. max_chars > 0이면 잘라냄."""
+    """Safely read a text file. Truncates if max_chars > 0."""
     try:
         with open(path, "r", encoding="utf-8") as f:
             content = f.read()
@@ -53,7 +53,7 @@ def read_text(path: Path, max_chars: int = 0) -> Optional[str]:
 
 
 def parse_frontmatter(text: str) -> dict:
-    """YAML frontmatter를 간이 파싱 (--- 블록). PyYAML 없이 key: value만 추출."""
+    """Minimal YAML frontmatter parser (--- block). Extracts key: value pairs without PyYAML."""
     result = {}
     if not text.startswith("---"):
         return result
@@ -68,7 +68,7 @@ def parse_frontmatter(text: str) -> dict:
         key, _, val = line.partition(":")
         key = key.strip().lower()
         val = val.strip().strip('"').strip("'")
-        # tools 같은 리스트 처리 (인라인 [a, b, c])
+        # Handle list values like tools (inline [a, b, c])
         if val.startswith("[") and val.endswith("]"):
             val = [v.strip().strip('"').strip("'") for v in val[1:-1].split(",") if v.strip()]
         result[key] = val
@@ -76,23 +76,23 @@ def parse_frontmatter(text: str) -> dict:
 
 
 def decode_project_path(folder_name: str) -> str:
-    """프로젝트 폴더명을 실제 경로로 변환. '-home-sungjoo-repo' → '/home/sungjoo/repo'
+    """Convert a project folder name to its actual path. '-home-sungjoo-repo' → '/home/sungjoo/repo'
 
-    Claude Code는 '/'를 '-'로 치환해서 폴더명을 만듦.
-    하이픈이 포함된 디렉토리명과 구분하기 위해 실제 존재하는 경로를 탐욕적으로 탐색.
+    Claude Code replaces '/' with '-' to form folder names.
+    Greedily searches for an existing path to distinguish from directories containing hyphens.
     """
     parts = folder_name.lstrip("-").split("-")
     if not parts:
         return "/" + folder_name.lstrip("-")
 
-    # 탐욕법: 왼쪽부터 가장 긴 매칭을 시도하되, '-'와 '_' 구분자 모두 테스트
+    # Greedy: try the longest match from the left, testing both '-' and '_' separators
     best_segments = []
     i = 0
     while i < len(parts):
         found = False
         for j in range(len(parts), i, -1):
             sub = parts[i:j]
-            # '-' 연결과 '_' 연결 모두 시도 (Claude Code는 _ 도 - 로 인코딩)
+            # Try both '-' and '_' joins (Claude Code encodes _ as - too)
             for sep in ("-", "_"):
                 candidate = sep.join(sub)
                 test_path = "/" + "/".join(best_segments + [candidate])
@@ -110,32 +110,32 @@ def decode_project_path(folder_name: str) -> str:
     return "/" + "/".join(best_segments)
 
 
-# ─── 데이터 수집 함수들 ──────────────────────────────────────────────────────
+# ─── Data Collection Functions ──────────────────────────────────────────────
 
 def get_health() -> dict:
-    """하네스 건강 점수 (0-100), 7개 항목 체크."""
+    """Harness health score (0-100), checks 7 items."""
     items = {}
 
     # 1) claude_md
     items["claude_md"] = (CLAUDE_DIR / "CLAUDE.md").is_file()
 
-    # 2) permissions — settings.json에 permissions 키가 있는지
+    # 2) permissions — check if settings.json has a permissions key
     settings = read_json(CLAUDE_DIR / "settings.json")
     items["permissions"] = bool(settings and "permissions" in settings)
 
-    # 3) hooks — settings.json에 hooks 키가 있는지
+    # 3) hooks — check if settings.json has a hooks key
     items["hooks"] = bool(settings and "hooks" in settings)
 
-    # 4) agents — 실제 에이전트가 있는지 (기본 경로 + 플러그인 캐시)
+    # 4) agents — check if any agents exist (default path + plugin cache)
     items["agents"] = len(get_agents()["agents"]) > 0
 
-    # 5) skills — 실제 스킬이 있는지 (기본 경로 + 플러그인 캐시)
+    # 5) skills — check if any skills exist (default path + plugin cache)
     items["skills"] = len(get_skills()["skills"]) > 0
 
-    # 6) connectors — MCP 서버가 있는지 (전체 스캔)
+    # 6) connectors — check if any MCP servers exist (full scan)
     items["connectors"] = len(get_connectors()["connectors"]) > 0
 
-    # 7) plugins — installed_plugins.json이 있고 플러그인 항목이 있는지
+    # 7) plugins — check if installed_plugins.json exists and has plugin entries
     plugins_data = read_json(CLAUDE_DIR / "plugins" / "installed_plugins.json")
     if plugins_data and isinstance(plugins_data, dict):
         plugins_map = plugins_data.get("plugins", {})
@@ -144,9 +144,9 @@ def get_health() -> dict:
         items["plugins"] = False
 
     total = 100
-    per_item = total // len(items)  # 14점씩, 나머지는 마지막에
+    per_item = total // len(items)  # 14 points each, remainder handled at end
     score = sum(per_item for v in items.values() if v)
-    # 보정: 7개 모두 True면 100
+    # Correction: if all 7 are True, score is 100
     if all(items.values()):
         score = 100
 
@@ -154,7 +154,7 @@ def get_health() -> dict:
 
 
 def get_sessions() -> dict:
-    """현재 사용자의 활성 claude 프로세스 목록."""
+    """List of active claude processes for the current user."""
     sessions = []
     try:
         user = os.environ.get("USER", os.getlogin())
@@ -170,7 +170,7 @@ def get_sessions() -> dict:
     except (subprocess.TimeoutExpired, FileNotFoundError):
         return {"sessions": sessions}
 
-    # ps aux 헤더: USER PID %CPU %MEM VSZ RSS TTY STAT START TIME COMMAND
+    # ps aux header: USER PID %CPU %MEM VSZ RSS TTY STAT START TIME COMMAND
     for line in result.stdout.splitlines()[1:]:
         parts = line.split(None, 10)
         if len(parts) < 11:
@@ -180,28 +180,28 @@ def get_sessions() -> dict:
         if ps_user != user:
             continue
 
-        # claude 프로세스만 필터 (claude 바이너리 또는 node claude)
+        # Filter to claude processes only (claude binary or node claude)
         cmd_lower = command.lower()
         if "claude" not in cmd_lower:
             continue
-        # 보조 프로세스 제외 (MCP 서버, node, bash wrapper 등)
+        # Exclude auxiliary processes (MCP servers, node, bash wrappers, etc.)
         if any(skip in cmd_lower for skip in [
-            "mcp-server", "server.py", "claude-cockpit", "node ", "bridge",
+            "mcp-server", "server.py", "claude-glean", "node ", "bridge",
             "/bin/bash", "cwd",
         ]):
             continue
 
         pid = int(pid_str)
 
-        # 프로세스 상태 매핑
+        # Map process state
         if stat.startswith("T"):
             state = "stopped"
         elif stat.startswith("R"):
             state = "running"
         else:
-            state = "active"  # S, Sl+ 등
+            state = "active"  # S, Sl+, etc.
 
-        # cwd 가져오기
+        # Get cwd
         cwd = ""
         try:
             cwd = os.readlink(f"/proc/{pid}/cwd")
@@ -221,7 +221,7 @@ def get_sessions() -> dict:
 
 
 def get_activity() -> dict:
-    """history.jsonl에서 오늘 명령 수 + 최근 활동 요약."""
+    """Today's command count + recent activity summary from history.jsonl."""
     history_path = CLAUDE_DIR / "history.jsonl"
     if not history_path.is_file():
         return {"today_count": 0, "recent": []}
@@ -238,7 +238,7 @@ def get_activity() -> dict:
             return {"today_count": 0, "recent": []}
         lines = text.splitlines()
 
-        # 오늘 명령 수 (전체 스캔)
+        # Today's command count (full scan)
         for line in lines:
             try:
                 entry = json.loads(line)
@@ -248,7 +248,7 @@ def get_activity() -> dict:
             except Exception:
                 continue
 
-        # 최근 10개 (마지막부터 역순)
+        # Last 10 entries (reversed from the end)
         for line in reversed(lines[-50:]):
             if len(recent) >= 10:
                 break
@@ -279,7 +279,7 @@ def _truncate(s: str, max_len: int) -> str:
 
 
 def get_projects_summary() -> dict:
-    """history.jsonl 기반 프로젝트별 명령 수 / 첫 요청 / 마지막 결과."""
+    """Per-project command count / first request / last result based on history.jsonl."""
     history_path = CLAUDE_DIR / "history.jsonl"
     if not history_path.is_file():
         return {"projects": []}
@@ -341,11 +341,11 @@ def get_projects_summary() -> dict:
 
 
 def get_instructions() -> dict:
-    """CLAUDE.md 파일들 (글로벌 + 프로젝트별)."""
+    """CLAUDE.md files (global + per-project)."""
     result: dict[str, Any] = {"global": {"exists": False}, "projects": []}
-    max_content = 50000  # 전체 내용 표시
+    max_content = 50000  # show full content
 
-    # 글로벌 CLAUDE.md
+    # Global CLAUDE.md
     global_path = CLAUDE_DIR / "CLAUDE.md"
     if global_path.is_file():
         content = read_text(global_path)
@@ -361,16 +361,16 @@ def get_instructions() -> dict:
                 "truncated": truncated,
             }
 
-    # 프로젝트별 CLAUDE.md
+    # Per-project CLAUDE.md
     projects_dir = CLAUDE_DIR / "projects"
     if projects_dir.is_dir():
-        # 등록된 모든 프로젝트 경로 수집 (하위 프로젝트 필터링용)
+        # Collect all registered project paths (for sub-project filtering)
         all_project_paths = []
         for pd in projects_dir.iterdir():
             if pd.is_dir():
                 all_project_paths.append(decode_project_path(pd.name))
-        all_project_paths.sort(key=len, reverse=True)  # 긴 경로(더 구체적) 먼저
-        seen_files = set()  # full_path 중복 방지
+        all_project_paths.sort(key=len, reverse=True)  # longer (more specific) paths first
+        seen_files = set()  # prevent full_path duplicates
 
         for proj_dir in sorted(projects_dir.iterdir()):
             if not proj_dir.is_dir():
@@ -390,22 +390,22 @@ def get_instructions() -> dict:
                         "line_count": line_count,
                         "truncated": truncated,
                     })
-            # 프로젝트 디렉토리 내 CLAUDE.md 트리 스캔 (루트 + 하위)
+            # Scan CLAUDE.md tree within project directory (root + subdirectories)
             project_root = Path(decoded_path)
             if project_root.is_dir():
-                # 이 프로젝트 하위에 등록된 다른 프로젝트 경로 (그쪽은 건너뛰기)
+                # Other registered project paths under this project (skip those)
                 sub_projects = [p for p in all_project_paths
                                 if p != decoded_path and p.startswith(decoded_path + "/")]
                 try:
                     for md_file in project_root.rglob("CLAUDE.md"):
                         md_str = str(md_file)
-                        # 중복 방지
+                        # Prevent duplicates
                         if md_str in seen_files:
                             continue
-                        # .git 등 숨김 디렉토리 제외
+                        # Exclude hidden directories like .git
                         if any(p.startswith(".") for p in md_file.relative_to(project_root).parts[:-1]):
                             continue
-                        # 다른 등록된 프로젝트 영역이면 건너뛰기
+                        # Skip if inside another registered project's area
                         parent_dir = str(md_file.parent)
                         skip = False
                         for sp in sub_projects:
@@ -440,7 +440,7 @@ def get_instructions() -> dict:
 
 
 def get_skills() -> dict:
-    """스킬 스캔: ~/.claude/skills/ + 플러그인 캐시 내 skills/."""
+    """Skill scan: ~/.claude/skills/ + skills/ inside plugin cache."""
     skills = []
     seen = set()
 
@@ -461,7 +461,7 @@ def get_skills() -> dict:
             if name in seen:
                 continue
             seen.add(name)
-            # frontmatter 이후 본문 추출
+            # Extract body after frontmatter
             body = content
             if content.startswith("---"):
                 end = content.find("---", 3)
@@ -475,15 +475,15 @@ def get_skills() -> dict:
                 "content": body[:2000],
             })
 
-    # 기본 경로
+    # Default path
     _scan_skills_dir(CLAUDE_DIR / "skills")
 
-    # 플러그인 캐시 내 스킬 — 플러그인 이름 추출
+    # Skills inside plugin cache — extract plugin name
     plugins_cache = CLAUDE_DIR / "plugins" / "cache"
     if plugins_cache.is_dir():
         for skills_subdir in plugins_cache.rglob("skills"):
             if skills_subdir.is_dir():
-                # 경로에서 플러그인 이름 추출: cache/<org>/<plugin-name>/<ver>/skills
+                # Extract plugin name from path: cache/<org>/<plugin-name>/<ver>/skills
                 parts = skills_subdir.relative_to(plugins_cache).parts
                 plugin_name = parts[1] if len(parts) >= 2 else "plugin"
                 _scan_skills_dir(skills_subdir, source=f"plugin:{plugin_name}")
@@ -492,7 +492,7 @@ def get_skills() -> dict:
 
 
 def get_agents() -> dict:
-    """에이전트 스캔: ~/.claude/agents/ + 플러그인 캐시 내 agents/."""
+    """Agent scan: ~/.claude/agents/ + agents/ inside plugin cache."""
     agents = []
     seen = set()
 
@@ -525,10 +525,10 @@ def get_agents() -> dict:
                 "content": body[:2000],
             })
 
-    # 기본 경로
+    # Default path
     _scan_agents_dir(CLAUDE_DIR / "agents")
 
-    # 플러그인 캐시 내 에이전트
+    # Agents inside plugin cache
     plugins_cache = CLAUDE_DIR / "plugins" / "cache"
     if plugins_cache.is_dir():
         for d in plugins_cache.rglob("agents"):
@@ -541,7 +541,7 @@ def get_agents() -> dict:
 
 
 def get_connectors() -> dict:
-    """MCP 서버 스캔: ~/.claude.json + 플러그인 내 .mcp.json + 세션 JSONL에서 cloud MCP 추출."""
+    """MCP server scan: ~/.claude.json + .mcp.json in plugins + extract cloud MCP from session JSONL."""
     connectors = []
     seen = set()  # "<source>:<name>" keys already added
 
@@ -558,14 +558,14 @@ def get_connectors() -> dict:
             if key in seen:
                 continue
             seen.add(key)
-            # 플러그인 서버의 경우 표시명에 플러그인 이름 포함
+            # For plugin servers, include plugin name in display name
             display_name = name
             if plugin_name and name != plugin_name:
                 display_name = f"{plugin_name} ({name})"
             connectors.append({
                 "name": display_name,
-                "_mcp_name": name,          # 실제 MCP 서버 이름 (매칭용)
-                "_plugin_name": plugin_name, # 플러그인 이름 (매칭용)
+                "_mcp_name": name,          # actual MCP server name (for matching)
+                "_plugin_name": plugin_name, # plugin name (for matching)
                 "command": config.get("command", ""),
                 "type": config.get("type", "local"),
                 "args": config.get("args", []),
@@ -577,43 +577,43 @@ def get_connectors() -> dict:
     # ~/.claude.json
     _add_mcp_servers(read_json(CLAUDE_JSON), "global")
 
-    # 플러그인 내 .mcp.json 파일들 — 중복 방지를 위해 cache만 스캔 (marketplaces와 동일)
+    # .mcp.json files inside plugins — scan only cache to avoid duplicates (same as marketplaces)
     plugins_cache = CLAUDE_DIR / "plugins" / "cache"
     if plugins_cache.is_dir():
         for mcp_file in plugins_cache.rglob(".mcp.json"):
             data = read_json(mcp_file)
-            # 경로에서 플러그인 이름 추출: cache/<org>/<plugin-name>/<ver>/.mcp.json
+            # Extract plugin name from path: cache/<org>/<plugin-name>/<ver>/.mcp.json
             parts = mcp_file.relative_to(plugins_cache).parts
             plugin_name = parts[1] if len(parts) >= 2 else mcp_file.parent.name
             _add_mcp_servers(data, f"plugin:{plugin_name}", plugin_name)
 
-    # ── 2차 패스: 세션 JSONL에서 mcp__ 패턴 추출 (cloud + plugin MCP 서버 발견) ──
+    # ── Second pass: extract mcp__ patterns from session JSONL (discover cloud + plugin MCP servers) ──
 
-    # 유효한 MCP 도구명 패턴: mcp__<alphanum_hyphen>__<alphanum_hyphen>
+    # Valid MCP tool name pattern: mcp__<alphanum_hyphen>__<alphanum_hyphen>
     _VALID_MCP_RE = re.compile(r"^mcp__[A-Za-z0-9][A-Za-z0-9_-]*__[A-Za-z][A-Za-z0-9_-]*$")
 
     def _parse_mcp_prefix(prefix: str):
-        """mcp server prefix를 (provider, server_name, mcp_type, source)로 분해.
+        """Decompose an mcp server prefix into (provider, server_name, mcp_type, source).
 
         Examples:
           claude_ai_Atlassian -> ('claude_ai', 'Atlassian', 'cloud', 'claude.ai')
           plugin_oh-my-claudecode_t -> ('plugin', 'oh-my-claudecode', 'local', 'plugin:oh-my-claudecode')
         """
         parts = prefix.split("_")
-        # 하이픈을 포함하는 세그먼트가 있으면 플러그인 형식
+        # If any segment contains a hyphen, it's a plugin format
         for i, p in enumerate(parts):
             if "-" in p:
                 provider = "_".join(parts[:i]) if i > 0 else "plugin"
                 server = p
                 return provider, server, "local", f"plugin:{server}"
-        # 하이픈 없음: 마지막 세그먼트가 서버 이름, 나머지가 프로바이더
+        # No hyphen: last segment is server name, rest is provider
         if len(parts) >= 2:
             server = parts[-1]
             provider = "_".join(parts[:-1])
             return provider, server, "cloud", "claude.ai"
         return prefix, prefix, "cloud", "claude.ai"
 
-    # 활성 세션 JSONL 파일 수집 (sessions/*.json → sessionId → projects/**/<sessionId>.jsonl)
+    # Collect active session JSONL files (sessions/*.json → sessionId → projects/**/<sessionId>.jsonl)
     sessions_dir = CLAUDE_DIR / "sessions"
     jsonl_paths: set = set()
     if sessions_dir.is_dir():
@@ -629,7 +629,7 @@ def get_connectors() -> dict:
                 for jsonl_file in projects_dir.rglob(f"{session_id}.jsonl"):
                     jsonl_paths.add(jsonl_file)
 
-    # JSONL이 없으면 모든 프로젝트의 최근 JSONL 파일도 포함 (fallback)
+    # If no JSONL files found, also include recent JSONL files from all projects (fallback)
     if not jsonl_paths:
         projects_dir = CLAUDE_DIR / "projects"
         if projects_dir.is_dir():
@@ -640,7 +640,7 @@ def get_connectors() -> dict:
                     if "subagent" not in jsonl_file.name:
                         jsonl_paths.add(jsonl_file)
 
-    # 각 JSONL에서 "mcp__" 패턴 grep으로 추출
+    # Extract "mcp__" patterns from each JSONL via grep
     # server_name -> {tools: set, type, source, command}
     server_tools: dict = {}
     for jsonl_path in jsonl_paths:
@@ -653,7 +653,7 @@ def get_connectors() -> dict:
                 continue
             for raw in result.stdout.splitlines():
                 tool_name = raw.strip().strip('"')
-                # 엄격한 유효성 검사: 올바른 mcp__ 패턴만 허용
+                # Strict validation: only allow valid mcp__ patterns
                 if not _VALID_MCP_RE.match(tool_name):
                     continue
                 # mcp__<prefix>__<tool>
@@ -677,14 +677,14 @@ def get_connectors() -> dict:
         except Exception:
             continue
 
-    # 로컬 스캔 결과와 병합
+    # Merge with local scan results
     for server_name, info in sorted(server_tools.items()):
         tools_list = sorted(info["tools"])
         tool_count = len(tools_list)
 
-        # 매칭 우선순위:
-        # 1) 이름 직접 일치
-        # 2) 같은 플러그인 소스 (e.g. plugin:oh-my-claudecode)로 등록된 서버
+        # Matching priority:
+        # 1) Direct name match
+        # 2) Server registered under the same plugin source (e.g. plugin:oh-my-claudecode)
         existing = next((c for c in connectors if c.get("_mcp_name") == server_name), None)
         if existing is None and info["source"].startswith("plugin:"):
             existing = next(
@@ -692,11 +692,11 @@ def get_connectors() -> dict:
                 None,
             )
         if existing:
-            # tools 목록만 업데이트
+            # Update tools list only
             existing["tools"] = tools_list
             existing["tool_count"] = tool_count
         else:
-            # 새 서버 추가 (cloud MCP 또는 jsonl에서만 발견된 plugin)
+            # Add new server (cloud MCP or plugin discovered only in jsonl)
             key = f"{info['source']}:{server_name}"
             if key in seen:
                 continue
@@ -713,7 +713,7 @@ def get_connectors() -> dict:
                 "tool_count": tool_count,
             })
 
-    # 내부 매칭 키 제거 (API 응답에 불필요)
+    # Remove internal matching keys (not needed in API response)
     for c in connectors:
         c.pop("_mcp_name", None)
         c.pop("_plugin_name", None)
@@ -737,7 +737,7 @@ def get_hooks() -> dict:
                 if not isinstance(h, dict):
                     continue
                 matcher = h.get("matcher", "")
-                # 새 구조: {"matcher": "...", "hooks": [{...}]}
+                # New structure: {"matcher": "...", "hooks": [{...}]}
                 sub_hooks = h.get("hooks", [])
                 if isinstance(sub_hooks, list) and sub_hooks:
                     for sh in sub_hooks:
@@ -759,12 +759,12 @@ def get_hooks() -> dict:
                                 "if": sh.get("if", ""),
                                 "shell": sh.get("shell", ""),
                             }
-                            # 빈 값 제거
+                            # Remove empty values
                             entry = {k: v for k, v in entry.items() if v}
                             entry.setdefault("event", event)
                             entry.setdefault("type", "command")
                             hooks_list.append(entry)
-                # 이전 구조: {"command": "...", "description": "..."}
+                # Old structure: {"command": "...", "description": "..."}
                 elif "command" in h:
                     hooks_list.append({
                         "event": event,
@@ -775,19 +775,19 @@ def get_hooks() -> dict:
                         "timeout": h.get("timeout"),
                     })
 
-    # user hooks에 source 태그 추가
+    # Add source tag to user hooks
     for h in hooks_list:
         if "source" not in h:
             h["source"] = "user"
 
-    # 플러그인 hooks 스캔
+    # Scan plugin hooks
     plugins_dir = CLAUDE_DIR / "plugins"
     if plugins_dir.is_dir():
         for hooks_json in plugins_dir.rglob("hooks/hooks.json"):
             try:
                 data = json.loads(hooks_json.read_text(encoding="utf-8"))
                 plugin_hooks = data.get("hooks", {})
-                # 플러그인 이름 추출
+                # Extract plugin name
                 parts = str(hooks_json).split("/")
                 plugin_name = "plugin"
                 for i, p in enumerate(parts):
@@ -831,7 +831,7 @@ def get_hooks() -> dict:
 
 
 def get_forks() -> dict:
-    """JSONL 세션 파일에서 포크 포인트(분기) 탐색."""
+    """Search for fork points (branches) in JSONL session files."""
     forks = []
     projects_dir = CLAUDE_DIR / "projects"
     if not projects_dir.is_dir():
@@ -851,10 +851,10 @@ def get_forks() -> dict:
                 if not text:
                     continue
                 lines = text.splitlines()
-                # 마지막 3000줄만 처리
+                # Process only last 3000 lines
                 lines = lines[-3000:]
 
-                # parent→children 맵 구축
+                # Build parent→children map
                 parent_to_children: dict[str, list[dict]] = {}
                 entries_by_uuid: dict[str, dict] = {}
 
@@ -870,14 +870,14 @@ def get_forks() -> dict:
                     if parent_uuid:
                         parent_to_children.setdefault(parent_uuid, []).append(entry)
 
-                # 포크 포인트 찾기: children이 2개 이상인 parent
+                # Find fork points: parents with 2 or more children
                 project_name = decode_project_path(proj_dir.name)
                 session_id = jsonl_file.stem
 
                 for parent_uuid, children in parent_to_children.items():
                     if len(children) <= 1:
                         continue
-                    # 각 분기 자식 중 user 메시지 추출
+                    # Extract user messages from each branch child
                     for child in children:
                         if child.get("type") != "user":
                             continue
@@ -885,7 +885,7 @@ def get_forks() -> dict:
                         if not msg_text and isinstance(child.get("content"), str):
                             msg_text = child["content"]
                         if not msg_text:
-                            # content가 리스트인 경우
+                            # content is a list
                             content = child.get("message", {}).get("content", []) if isinstance(child.get("message"), dict) else child.get("content", [])
                             if isinstance(content, list):
                                 for block in content:
@@ -918,14 +918,14 @@ def get_forks() -> dict:
             except Exception:
                 continue
 
-    # timestamp 내림차순 정렬
+    # Sort by timestamp descending
     forks.sort(key=lambda x: x.get("timestamp", ""), reverse=True)
 
     return {"forks": forks, "total": len(forks)}
 
 
 def get_project_status() -> dict:
-    """프로젝트별 관리 상태 스캔: CLAUDE.md, memory, settings, sessions 등."""
+    """Scan per-project management status: CLAUDE.md, memory, settings, sessions, etc."""
     projects_dir = CLAUDE_DIR / "projects"
     if not projects_dir.is_dir():
         return {"projects": []}
@@ -997,7 +997,7 @@ def get_plugins() -> dict:
     """installed_plugins.json + settings.json enabledPlugins."""
     plugins = []
 
-    # 설치된 플러그인 읽기
+    # Read installed plugins
     plugins_data = read_json(CLAUDE_DIR / "plugins" / "installed_plugins.json")
     if not plugins_data or not isinstance(plugins_data, dict):
         return {"plugins": plugins}
@@ -1006,7 +1006,7 @@ def get_plugins() -> dict:
     if not isinstance(plugins_map, dict):
         return {"plugins": plugins}
 
-    # 활성화된 플러그인 목록
+    # List of enabled plugins
     settings = read_json(CLAUDE_DIR / "settings.json")
     enabled_plugins = {}
     if settings and "enabledPlugins" in settings:
@@ -1017,13 +1017,13 @@ def get_plugins() -> dict:
             enabled_plugins = {name: True for name in ep}
 
     for plugin_key, entries in plugins_map.items():
-        # entries는 설치 정보 리스트
+        # entries is a list of install info
         if isinstance(entries, list) and entries:
-            entry = entries[0]  # 첫 번째 설치 정보
+            entry = entries[0]  # first install info entry
             if isinstance(entry, dict):
-                # 이름 추출: "oh-my-claudecode@omc" → "oh-my-claudecode"
+                # Extract name: "oh-my-claudecode@omc" → "oh-my-claudecode"
                 name = plugin_key.split("@")[0] if "@" in plugin_key else plugin_key
-                # 플러그인 소속 스킬/에이전트/커넥터 수
+                # Count skills/agents/connectors belonging to this plugin
                 plugin_source = f"plugin:{name}"
                 n_skills = len([s for s in get_skills()["skills"] if s.get("source") == plugin_source])
                 n_agents = len([a for a in get_agents()["agents"] if a.get("source") == plugin_source])
@@ -1046,17 +1046,17 @@ def get_plugins() -> dict:
     return {"plugins": plugins}
 
 
-# ─── 세션 상세 / 검색 ────────────────────────────────────────────────────────
+# ─── Session Detail / Search ─────────────────────────────────────────────────
 
 def _read_last_n_lines(path: Path, n: int) -> list[str]:
-    """파일의 마지막 N줄을 효율적으로 읽기."""
+    """Efficiently read the last N lines of a file."""
     try:
         with open(path, "rb") as f:
             f.seek(0, 2)
             fsize = f.tell()
             if fsize == 0:
                 return []
-            # JSONL은 줄당 수 KB일 수 있으므로 넉넉히 읽기
+            # JSONL lines can be several KB each, so read generously
             read_size = min(fsize, n * 5000)
             f.seek(max(0, fsize - read_size))
             data = f.read().decode("utf-8", errors="replace")
@@ -1067,7 +1067,7 @@ def _read_last_n_lines(path: Path, n: int) -> list[str]:
 
 
 def _read_first_n_lines(path: Path, n: int) -> list[str]:
-    """파일의 처음 N줄을 읽기."""
+    """Read the first N lines of a file."""
     try:
         lines = []
         with open(path, "r", encoding="utf-8", errors="replace") as f:
@@ -1081,7 +1081,7 @@ def _read_first_n_lines(path: Path, n: int) -> list[str]:
 
 
 def _extract_user_message_text(entry: dict) -> str:
-    """JSONL 엔트리에서 사용자 메시지 텍스트 추출."""
+    """Extract user message text from a JSONL entry."""
     if entry.get("type") != "user":
         return ""
     msg = entry.get("message", {})
@@ -1102,12 +1102,12 @@ def _extract_user_message_text(entry: dict) -> str:
 
 
 def get_session_detail() -> dict:
-    """모든 세션(활성 + 히스토리) 상세 정보."""
+    """Detailed info for all sessions (active + history)."""
     projects_dir = CLAUDE_DIR / "projects"
     if not projects_dir.is_dir():
         return {"sessions": []}
 
-    # 활성 세션 ID 수집: sessions/*.json에서 PID가 실행 중인 세션의 sessionId
+    # Collect active session IDs: sessionId of sessions with running PIDs from sessions/*.json
     active_sessions = get_sessions().get("sessions", [])
     active_pids = {s["pid"] for s in active_sessions if s["state"] != "stopped"}
     active_session_ids = set()
@@ -1140,7 +1140,7 @@ def get_session_detail() -> dict:
                 decoded_path = decode_project_path(proj_dir.name)
                 project_name = Path(decoded_path).name or proj_dir.name
 
-                # 마지막 5줄에서 slug 추출
+                # Extract slug from last 5 lines
                 last_5 = _read_last_n_lines(jsonl_file, 5)
                 slug = ""
                 last_timestamp = ""
@@ -1154,7 +1154,7 @@ def get_session_detail() -> dict:
                             last_timestamp = entry["timestamp"]
                     except Exception:
                         continue
-                # customTitle은 type:"custom-title" 엔트리에만 존재 — grep으로 찾기
+                # customTitle only exists in type:"custom-title" entries — find via grep
                 if not custom_title:
                     try:
                         result = subprocess.run(
@@ -1168,7 +1168,7 @@ def get_session_detail() -> dict:
                         pass
                 slug = custom_title or slug
 
-                # 메시지 수 추정 (마지막 500줄 샘플링)
+                # Estimate message count (sample last 500 lines)
                 last_500 = _read_last_n_lines(jsonl_file, 500)
                 message_count = 0
                 for line in last_500:
@@ -1180,7 +1180,7 @@ def get_session_detail() -> dict:
                     except Exception:
                         continue
 
-                # 첫 번째 사용자 메시지 (처음 20줄)
+                # First user message (first 20 lines)
                 first_20 = _read_first_n_lines(jsonl_file, 20)
                 first_message = ""
                 for line in first_20:
@@ -1193,7 +1193,7 @@ def get_session_detail() -> dict:
                     except Exception:
                         continue
 
-                # 마지막 사용자 메시지 (마지막 20줄)
+                # Last user message (last 20 lines)
                 last_20 = _read_last_n_lines(jsonl_file, 20)
                 last_message = ""
                 for line in reversed(last_20):
@@ -1206,7 +1206,7 @@ def get_session_detail() -> dict:
                     except Exception:
                         continue
 
-                # 포크 수 (마지막 1000줄 샘플링)
+                # Fork count (sample last 1000 lines)
                 last_1000 = _read_last_n_lines(jsonl_file, 1000)
                 parent_children: dict[str, int] = {}
                 for line in last_1000:
@@ -1219,7 +1219,7 @@ def get_session_detail() -> dict:
                         continue
                 fork_count = sum(1 for c in parent_children.values() if c > 1)
 
-                # 활성 여부 확인 (세션 ID가 활성 세션 목록에 있는지)
+                # Check if active (session ID is in active session list)
                 is_active = session_id in active_session_ids
 
                 sessions.append({
@@ -1238,14 +1238,14 @@ def get_session_detail() -> dict:
             except Exception:
                 continue
 
-    # 정렬: 활성 먼저, 그 다음 last_timestamp 내림차순
+    # Sort: active first, then last_timestamp descending
     sessions.sort(key=lambda x: (not x["is_active"], -(x.get("last_timestamp") or 0) if isinstance(x.get("last_timestamp"), (int,float)) else x.get("last_timestamp", "") or ""), reverse=False)
 
     return {"sessions": sessions}
 
 
 def _extract_token_usage(lines: list[str]) -> dict:
-    """JSONL 줄 목록에서 마지막 assistant 메시지의 usage.cache_read_input_tokens를 추출.
+    """Extract usage.cache_read_input_tokens from the last assistant message in a list of JSONL lines.
 
     Returns dict with 'context_tokens' (int) or empty dict if not found.
     """
@@ -1258,7 +1258,7 @@ def _extract_token_usage(lines: list[str]) -> dict:
             continue
         usage = entry.get("usage")
         if not isinstance(usage, dict):
-            # usage가 message 안에 있을 수도 있음
+            # usage may be inside the message object
             msg = entry.get("message")
             if isinstance(msg, dict):
                 usage = msg.get("usage")
@@ -1273,7 +1273,7 @@ def _extract_token_usage(lines: list[str]) -> dict:
 
 
 def _format_token_display(tokens: int) -> str:
-    """토큰 수를 읽기 쉬운 문자열로 포맷. 예: 318029 → '318k'"""
+    """Format a token count as a human-readable string. e.g. 318029 → '318k'"""
     if tokens >= 1_000_000:
         return f"{tokens / 1_000_000:.1f}M"
     elif tokens >= 1000:
@@ -1282,7 +1282,7 @@ def _format_token_display(tokens: int) -> str:
 
 
 def get_session_xray(session_id: str) -> dict:
-    """세션 컨텍스트 X-ray: JSONL의 실제 토큰 사용량(cache_read_input_tokens) 기반."""
+    """Session context X-ray: based on actual token usage (cache_read_input_tokens) from JSONL."""
     if not session_id:
         return {"error": "session_id required"}
 
@@ -1353,7 +1353,7 @@ def get_session_xray(session_id: str) -> dict:
     # Format display string
     context_display = f"{_format_token_display(context_tokens)} / 1M tokens"
 
-    # Breakdown 추정: 파일 크기 기반
+    # Breakdown estimate: based on file size
     breakdown = []
     autocompact_buffer = 33000  # ~33k tokens (roughly fixed)
 
@@ -1426,7 +1426,7 @@ def get_session_xray(session_id: str) -> dict:
 
 
 def get_session_search(query: str = "") -> dict:
-    """세션 검색: JSONL 파일에서 사용자 메시지를 검색."""
+    """Session search: search user messages in JSONL files."""
     if not query or len(query.strip()) < 1:
         return {"results": [], "query": query}
 
@@ -1449,7 +1449,7 @@ def get_session_search(query: str = "") -> dict:
                 decoded_path = decode_project_path(proj_dir.name)
                 project_name = Path(decoded_path).name or proj_dir.name
 
-                # slug/customTitle 추출
+                # Extract slug/customTitle
                 last_5 = _read_last_n_lines(jsonl_file, 5)
                 slug = ""
                 custom_title = ""
@@ -1460,7 +1460,7 @@ def get_session_search(query: str = "") -> dict:
                             slug = entry["slug"]
                     except Exception:
                         continue
-                # customTitle은 type:"custom-title" 엔트리에만 존재 — grep으로 찾기
+                # customTitle only exists in type:"custom-title" entries — find via grep
                 if not custom_title:
                     try:
                         result = subprocess.run(
@@ -1474,7 +1474,7 @@ def get_session_search(query: str = "") -> dict:
                         pass
                 slug = custom_title or slug
 
-                # 마지막 2000줄 검색
+                # Search last 2000 lines
                 lines = _read_last_n_lines(jsonl_file, 2000)
                 for line in reversed(lines):
                     try:
@@ -1489,7 +1489,7 @@ def get_session_search(query: str = "") -> dict:
                                 "matched_text": text[:150],
                                 "timestamp": ts,
                             })
-                            break  # 세션당 첫 매치만
+                            break  # only first match per session
                     except Exception:
                         continue
 
@@ -1503,10 +1503,10 @@ def get_session_search(query: str = "") -> dict:
     return {"results": results[:20], "query": query}
 
 
-# ─── 알림/모니터링 ─────────────────────────────────────────────────────────────
+# ─── Alerts / Monitoring ─────────────────────────────────────────────────────
 
 def _count_lines(path: Path) -> int:
-    """파일의 줄 수를 반환."""
+    """Return the number of lines in a file."""
     try:
         content = read_text(path)
         if content is None:
@@ -1517,10 +1517,10 @@ def _count_lines(path: Path) -> int:
 
 
 def get_alerts() -> dict:
-    """경고/모니터링 정보 집계: CLAUDE.md 상태, 세션 컨텍스트 등."""
+    """Aggregate alert/monitoring info: CLAUDE.md status, session context, etc."""
     alerts: list[dict] = []
 
-    # ── 1. CLAUDE.md 체크 ──────────────────────────────────────────────
+    # ── 1. CLAUDE.md check ─────────────────────────────────────────────
     # 1a. Global CLAUDE.md
     global_md = CLAUDE_DIR / "CLAUDE.md"
     if not global_md.is_file():
@@ -1596,8 +1596,8 @@ def get_alerts() -> dict:
                     "action": f"Create CLAUDE.md in {decoded_path}",
                 })
 
-    # ── 2. 활성 세션 컨텍스트 체크 (실제 토큰 데이터 기반) ──────────
-    # 활성 세션 ID 수집
+    # ── 2. Active session context check (based on real token data) ────
+    # Collect active session IDs
     active_sessions_data = get_sessions().get("sessions", [])
     active_pids = {s["pid"] for s in active_sessions_data if s.get("state") != "stopped"}
     active_session_ids = set()
@@ -1613,7 +1613,7 @@ def get_alerts() -> dict:
             except Exception:
                 continue
 
-    # 활성 세션의 JSONL 파일에서 실제 토큰 사용량 추출
+    # Extract actual token usage from active session JSONL files
     session_ok_count = 0
     if projects_dir.is_dir():
         for proj_dir in projects_dir.iterdir():
@@ -1626,7 +1626,7 @@ def get_alerts() -> dict:
                 if session_id not in active_session_ids:
                     continue
 
-                # slug/customTitle 추출
+                # Extract slug/customTitle
                 last_5 = _read_last_n_lines(jsonl_file, 5)
                 slug = ""
                 custom_title = ""
@@ -1653,7 +1653,7 @@ def get_alerts() -> dict:
                 project_name = Path(project_path).name or proj_dir.name
                 display_name = (slug or session_id[:16]) + f" ({project_name})"
 
-                # 마지막 20줄에서 실제 토큰 사용량 추출
+                # Extract actual token usage from last 20 lines
                 last_20 = _read_last_n_lines(jsonl_file, 20)
                 token_data = _extract_token_usage(last_20)
                 context_tokens = token_data.get("context_tokens", 0)
@@ -1696,23 +1696,23 @@ def get_alerts() -> dict:
             "action": "",
         })
 
-    # ── 요약 계산 ──────────────────────────────────────────────────────
+    # ── Summary calculation ─────────────────────────────────────────────
     summary = {"critical": 0, "warn": 0, "info": 0, "ok": 0}
     for a in alerts:
         level = a.get("level", "info")
         if level in summary:
             summary[level] += 1
 
-    # critical/warn 먼저, ok 마지막 정렬
+    # Sort: critical/warn first, ok last
     level_order = {"critical": 0, "warn": 1, "info": 2, "ok": 3}
     alerts.sort(key=lambda a: level_order.get(a.get("level", "info"), 2))
 
     return {"alerts": alerts, "summary": summary}
 
 
-# ─── HTTP 핸들러 ─────────────────────────────────────────────────────────────
+# ─── HTTP Handler ────────────────────────────────────────────────────────────
 
-# API 라우터: path → handler 매핑
+# API router: path → handler mapping
 API_ROUTES: dict[str, callable] = {
     "/api/health": get_health,
     "/api/sessions": get_sessions,
@@ -1731,12 +1731,12 @@ API_ROUTES: dict[str, callable] = {
 }
 
 
-class CockpitHandler(BaseHTTPRequestHandler):
-    """Claude Cockpit HTTP 요청 핸들러."""
+class GleanHandler(BaseHTTPRequestHandler):
+    """Claude Glean HTTP request handler."""
 
-    # 로그 출력 간소화
+    # Simplify log output
     def log_message(self, format, *args):
-        # 간단한 한 줄 로그
+        # Simple one-line log
         print(f"[{self.log_date_time_string()}] {args[0] if args else ''}")
 
     def do_GET(self):
@@ -1744,29 +1744,29 @@ class CockpitHandler(BaseHTTPRequestHandler):
         path = parsed.path.rstrip("/") or "/"
         query_params = parse_qs(parsed.query)
 
-        # API 엔드포인트: session-search (쿼리 파라미터 필요)
+        # API endpoint: session-search (requires query parameter)
         if path == "/api/session-search":
             q = query_params.get("q", [""])[0]
             self._json_response(get_session_search(q))
             return
 
-        # API 엔드포인트: session-xray (쿼리 파라미터 필요)
+        # API endpoint: session-xray (requires query parameter)
         if path == "/api/session-xray":
             sid = query_params.get("id", [""])[0]
             self._json_response(get_session_xray(sid))
             return
 
-        # API 엔드포인트
+        # API endpoint
         if path in API_ROUTES:
             self._json_response(API_ROUTES[path]())
             return
 
-        # SSE 스트림
+        # SSE stream
         if path == "/sse/live":
             self._sse_stream()
             return
 
-        # 정적 파일 서빙
+        # Serve static files
         self._serve_static(path)
 
     def do_POST(self):
@@ -1779,7 +1779,7 @@ class CockpitHandler(BaseHTTPRequestHandler):
             if not dir_name:
                 self._json_response({"error": "dir parameter required"}, 400)
                 return
-            # 안전 검증: projects 디렉토리 안의 폴더만 삭제 가능
+            # Safety check: only allow deletion of folders inside projects directory
             target = CLAUDE_DIR / "projects" / dir_name
             if not target.is_dir() or ".." in dir_name:
                 self._json_response({"error": "invalid project directory"}, 400)
@@ -1951,7 +1951,7 @@ class CockpitHandler(BaseHTTPRequestHandler):
         self._json_response({"error": "not found"}, 404)
 
     def _json_response(self, data: Any, status: int = 200):
-        """JSON 응답 전송."""
+        """Send JSON response."""
         body = json.dumps(data, ensure_ascii=False, default=str).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
@@ -1961,7 +1961,7 @@ class CockpitHandler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def _sse_stream(self):
-        """Server-Sent Events 스트림. 5초마다 sessions/activity, 30초마다 alerts 전송."""
+        """Server-Sent Events stream. Sends sessions/activity every 5s, alerts every 30s."""
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream")
         self.send_header("Cache-Control", "no-cache")
@@ -1969,11 +1969,11 @@ class CockpitHandler(BaseHTTPRequestHandler):
         self.send_header("Access-Control-Allow-Origin", "*")
         self.end_headers()
 
-        alerts_counter = 0  # alerts는 30초마다 (6 * 5초)
+        alerts_counter = 0  # alerts every 30s (6 * 5s)
 
         try:
             while True:
-                # sessions 이벤트
+                # sessions event
                 sessions_data = get_sessions()
                 event = {
                     "type": "sessions",
@@ -1981,7 +1981,7 @@ class CockpitHandler(BaseHTTPRequestHandler):
                 }
                 self._send_sse_event(event)
 
-                # activity 이벤트
+                # activity event
                 activity_data = get_activity()
                 event = {
                     "type": "activity",
@@ -1989,7 +1989,7 @@ class CockpitHandler(BaseHTTPRequestHandler):
                 }
                 self._send_sse_event(event)
 
-                # alerts 이벤트 (30초마다)
+                # alerts event (every 30s)
                 if alerts_counter % 6 == 0:
                     alerts_data = get_alerts()
                     event = {
@@ -2002,28 +2002,28 @@ class CockpitHandler(BaseHTTPRequestHandler):
                 self.wfile.flush()
                 time.sleep(SSE_INTERVAL)
         except (BrokenPipeError, ConnectionResetError, OSError):
-            # 클라이언트 연결 끊김
+            # Client disconnected
             pass
 
     def _send_sse_event(self, data: dict):
-        """단일 SSE 이벤트 전송."""
+        """Send a single SSE event."""
         payload = json.dumps(data, ensure_ascii=False, default=str)
         self.wfile.write(f"data: {payload}\n\n".encode("utf-8"))
 
     def _serve_static(self, path: str):
-        """정적 파일 서빙 (dist/ 디렉토리)."""
+        """Serve static files from dist/ directory."""
         # / → /dist/index.html
         if path == "/":
             file_path = DIST_DIR / "index.html"
         elif path.startswith("/dist/"):
             file_path = DIST_DIR / path[len("/dist/"):]
         elif path.startswith("/assets/"):
-            file_path = DIST_DIR / path[1:]  # assets/ 그대로
+            file_path = DIST_DIR / path[1:]  # assets/ as-is
         else:
-            # dist 내에서 찾기
+            # Look inside dist
             file_path = DIST_DIR / path.lstrip("/")
 
-        # 보안: 경로 탈출 방지
+        # Security: prevent path traversal
         try:
             file_path = file_path.resolve()
             dist_resolved = DIST_DIR.resolve()
@@ -2035,7 +2035,7 @@ class CockpitHandler(BaseHTTPRequestHandler):
             return
 
         if not file_path.is_file():
-            # SPA 라우팅: 파일이 없으면 index.html 반환
+            # SPA routing: serve index.html for unknown paths
             index = DIST_DIR / "index.html"
             if index.is_file() and not path.startswith("/api/"):
                 file_path = index
@@ -2043,7 +2043,7 @@ class CockpitHandler(BaseHTTPRequestHandler):
                 self._error_response(404, "Not Found")
                 return
 
-        # MIME 타입 결정
+        # Determine MIME type
         mime_type, _ = mimetypes.guess_type(str(file_path))
         mime_map = {
             ".html": "text/html; charset=utf-8",
@@ -2073,19 +2073,19 @@ class CockpitHandler(BaseHTTPRequestHandler):
             self._error_response(500, "Internal Server Error")
 
     def _error_response(self, status: int, message: str):
-        """에러 JSON 응답."""
+        """Send error JSON response."""
         self._json_response({"error": message}, status=status)
 
 
-# ─── 서버 실행 ───────────────────────────────────────────────────────────────
+# ─── Server startup ──────────────────────────────────────────────────────────
 
 class ThreadedHTTPServer(HTTPServer):
-    """요청마다 스레드를 생성하는 HTTP 서버 (SSE 지원을 위해 필수)."""
+    """Threaded HTTP server (required for SSE support)."""
     allow_reuse_address = True
     daemon_threads = True
 
     def process_request(self, request, client_address):
-        """각 요청을 별도 스레드에서 처리."""
+        """Handle each request in a separate thread."""
         t = threading.Thread(target=self._handle_request_thread,
                              args=(request, client_address))
         t.daemon = True
@@ -2101,7 +2101,7 @@ class ThreadedHTTPServer(HTTPServer):
 
 
 def main():
-    server = ThreadedHTTPServer((BIND_HOST, BIND_PORT), CockpitHandler)
+    server = ThreadedHTTPServer((BIND_HOST, BIND_PORT), GleanHandler)
     print(f"Serving on http://{BIND_HOST}:{BIND_PORT}")
     print(f"→ Internal network: http://{INTERNAL_IP}:{BIND_PORT}")
     print(f"→ Static files: {DIST_DIR}")
@@ -2110,7 +2110,7 @@ def main():
     try:
         server.serve_forever()
     except KeyboardInterrupt:
-        print("\n서버 종료...")
+        print("\nShutting down...")
         server.shutdown()
 
 

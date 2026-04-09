@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Claude Cockpit</title>
+<title>Claude Glean</title>
 <style>
 /* ============================================================
    RESET & FOUNDATIONS
@@ -1026,7 +1026,7 @@ body {
 <!-- SIDEBAR -->
 <aside class="sidebar">
   <div class="sidebar-header">
-    <div class="sidebar-title">Claude Cockpit</div>
+    <div class="sidebar-title">Claude Glean</div>
   </div>
 
   <nav class="sidebar-nav">
@@ -1307,12 +1307,12 @@ function switchTab(tabId, navEl) {
   if (navEl) navEl.classList.add('active');
 
   // Save current tab
-  localStorage.setItem('cockpit-active-tab', tabId);
+  localStorage.setItem('glean-active-tab', tabId);
 }
 
 // Restore last active tab on load
 function restoreActiveTab() {
-  const saved = localStorage.getItem('cockpit-active-tab');
+  const saved = localStorage.getItem('glean-active-tab');
   if (!saved) return;
   const navEl = document.querySelector(`.nav-item[data-tab="${saved}"]`);
   if (navEl) switchTab(saved, navEl);
@@ -2687,11 +2687,11 @@ function saveOverviewOrder() {
   const grid = document.getElementById('overviewCardsGrid');
   const cards = grid.querySelectorAll('.drag-card');
   const ids = Array.from(cards).map(c => c.dataset.cardId);
-  localStorage.setItem('cockpit-card-order', JSON.stringify(ids));
+  localStorage.setItem('glean-card-order', JSON.stringify(ids));
 }
 
 function restoreOverviewOrder() {
-  const raw = localStorage.getItem('cockpit-card-order');
+  const raw = localStorage.getItem('glean-card-order');
   if (!raw) return;
   let savedIds;
   try { savedIds = JSON.parse(raw); } catch(e) { return; }
