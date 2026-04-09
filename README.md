@@ -116,74 +116,13 @@ Per-project management status:
 - Click to expand associated skills, agents, and connectors
 - Active/Inactive status from `enabledPlugins`
 
-## Real-time Updates
-
-- **SSE (Server-Sent Events)** pushes session updates every 5 seconds
-- **Alerts** refresh every 30 seconds
-- Active tab is preserved across page refreshes
-
-## Data Sources
-
-All data is read from `~/.claude/`:
-
-| Data | Source |
-|------|--------|
-| Sessions | `ps aux` + `~/.claude/sessions/*.json` |
-| Instructions | `~/.claude/CLAUDE.md` + `~/.claude/projects/*/CLAUDE.md` + repo CLAUDE.md files |
-| Skills | `~/.claude/skills/` + plugin cache |
-| Agents | `~/.claude/agents/` + plugin cache |
-| Connectors | `.mcp.json` files + session jsonl MCP tool detection |
-| Hooks | `~/.claude/settings.json` + plugin `hooks/hooks.json` |
-| Plugins | `~/.claude/plugins/installed_plugins.json` |
-| Forks | Session jsonl parent-child branching analysis |
-| Projects | `~/.claude/projects/*/` directory scan |
-| Activity | `~/.claude/history.jsonl` |
-| Context X-ray | `cache_read_input_tokens` from session jsonl |
-| Session names | `customTitle` (from `/rename`) or auto-generated `slug` |
-
-## API Endpoints
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | `/api/health` | Harness score (0-100) |
-| GET | `/api/sessions` | Active Claude processes |
-| GET | `/api/activity` | Today's command count + recent prompts |
-| GET | `/api/instructions` | Global + per-project CLAUDE.md with content |
-| GET | `/api/skills` | All skills with content |
-| GET | `/api/agents` | All agents with content |
-| GET | `/api/connectors` | Local + cloud MCP servers with tools |
-| GET | `/api/hooks` | User + plugin hooks |
-| GET | `/api/plugins` | Installed plugins with details |
-| GET | `/api/forks` | Fork points from session history |
-| GET | `/api/projects-summary` | Per-project command history |
-| GET | `/api/project-status` | Per-project config status |
-| GET | `/api/alerts` | Aggregated warnings |
-| GET | `/api/session-detail` | All sessions with slug, messages, forks |
-| GET | `/api/session-search?q=` | Search conversation history |
-| GET | `/api/session-xray?id=` | Context X-ray for a session |
-| GET | `/sse/live` | Server-Sent Events stream |
-| POST | `/api/delete-project?dir=` | Delete a project |
-| POST | `/api/delete-skill?name=` | Delete a user skill |
-| POST | `/api/delete-agent?name=` | Delete a user agent |
-| POST | `/api/delete-hook?event=&index=` | Delete a hook |
-| POST | `/api/delete-session?id=` | Delete a session |
-| POST | `/api/delete-fork?id=` | Delete a fork session |
-
 ## Network Access
 
-By default, the server binds to `0.0.0.0:8080`, making it accessible from other machines on the local network:
+By default, the server binds to `0.0.0.0:8080`, accessible from other machines on the local network:
 
 ```
 http://<your-ip>:8080
 ```
-
-## Tech Stack
-
-- **Backend**: Python 3.9+ (stdlib only — `http.server`, `json`, `subprocess`, `pathlib`)
-- **Frontend**: Single HTML file with embedded CSS + JS (no build step, no dependencies)
-- **Real-time**: Server-Sent Events (SSE)
-- **Theme**: Modern dark (zinc-950 base), sidebar + tab layout
-- **Storage**: localStorage for card order and active tab persistence
 
 ## License
 
