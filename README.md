@@ -2,6 +2,8 @@
 
 Real-time Claude Code workspace monitor. A local web dashboard that gives you a single-screen overview of all your Claude Code sessions, instructions, skills, agents, connectors, hooks, plugins, forks, and projects.
 
+<img width="1429" height="1857" alt="image" src="https://github.com/user-attachments/assets/2d03bb5f-4a18-423c-8883-d97de72cc893" />
+
 > **Read-only by default** — the dashboard reads from `~/.claude/` and never modifies files unless you explicitly click a Delete button.
 
 ## Quick Start
