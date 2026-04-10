@@ -8,21 +8,28 @@ A local dashboard that **gathers scattered Claude Code workspace data into one s
 
 ## Quick Start
 
+**Linux / macOS:**
 ```bash
 python3 server.py
+```
+
+**Windows:**
+```powershell
+python server.py
 ```
 
 Open `http://localhost:8080`. That's it.
 
 Custom port:
-
 ```bash
-python3 server.py -p 3000        # port 3000
+python3 server.py -p 3000           # port 3000
 python3 server.py --host 127.0.0.1  # localhost only
 ```
 
 - Python 3.9+ (stdlib only, zero dependencies)
+- Works on Linux, macOS, and Windows
 - Default: `0.0.0.0:8080` — accessible from other machines via `http://<your-ip>:8080`
+- Data location: `~/.claude/` (Linux/macOS: `/home/<user>/.claude/`, Windows: `C:\Users\<user>\.claude\`)
 
 ## What It Solves
 

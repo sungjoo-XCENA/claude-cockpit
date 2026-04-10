@@ -163,67 +163,105 @@ def get_health() -> dict:
 
 def get_sessions() -> dict:
     """List of active claude processes for the current user."""
+    import platform
     sessions = []
-    try:
-        user = os.environ.get("USER", os.getlogin())
-    except OSError:
-        user = "unknown"
 
-    try:
-        result = subprocess.run(
-            ["ps", "aux"],
-            capture_output=True, text=True, timeout=5,
-            env={**os.environ, "LC_ALL": "C"}
-        )
-    except (subprocess.TimeoutExpired, FileNotFoundError):
-        return {"sessions": sessions}
-
-    # ps aux header: USER PID %CPU %MEM VSZ RSS TTY STAT START TIME COMMAND
-    for line in result.stdout.splitlines()[1:]:
-        parts = line.split(None, 10)
-        if len(parts) < 11:
-            continue
-        ps_user, pid_str, _cpu, _mem, _vsz, _rss, tty, stat, start, time_field, command = parts[0], parts[1], parts[2], parts[3], parts[4], parts[5], parts[6], parts[7], parts[8], parts[9], parts[10]
-
-        if ps_user != user:
-            continue
-
-        # Filter to claude processes only (claude binary or node claude)
-        cmd_lower = command.lower()
-        if "claude" not in cmd_lower:
-            continue
-        # Exclude auxiliary processes (MCP servers, node, bash wrappers, etc.)
-        if any(skip in cmd_lower for skip in [
-            "mcp-server", "server.py", "claude-gleaner", "node ", "bridge",
-            "/bin/bash", "cwd",
-        ]):
-            continue
-
-        pid = int(pid_str)
-
-        # Map process state
-        if stat.startswith("T"):
-            state = "stopped"
-        elif stat.startswith("R"):
-            state = "running"
-        else:
-            state = "active"  # S, Sl+, etc.
-
-        # Get cwd
-        cwd = ""
+    if platform.system() == "Windows":
+        # Windows: use tasklist /FO CSV
         try:
-            cwd = os.readlink(f"/proc/{pid}/cwd")
-        except (FileNotFoundError, PermissionError, OSError):
-            pass
+            result = subprocess.run(
+                ["tasklist", "/FO", "CSV", "/NH"],
+                capture_output=True, text=True, timeout=5
+            )
+        except (subprocess.TimeoutExpired, FileNotFoundError):
+            return {"sessions": sessions}
 
-        sessions.append({
-            "pid": pid,
-            "state": state,
-            "tty": tty,
-            "started": start,
-            "command": command.split("/")[-1] if "/" in command else command,
-            "cwd": cwd,
-        })
+        # CSV format: "image_name","pid","session_name","session#","mem_usage"
+        for line in result.stdout.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            # Strip surrounding quotes then split on ","
+            parts = line.strip('"').split('","')
+            if len(parts) < 2:
+                continue
+            image_name = parts[0].lower()
+            if "claude" not in image_name:
+                continue
+            try:
+                pid = int(parts[1])
+            except ValueError:
+                continue
+            sessions.append({
+                "pid": pid,
+                "state": "active",
+                "tty": "N/A",
+                "started": "",
+                "command": parts[0],
+                "cwd": "",
+            })
+    else:
+        # Linux / macOS: use ps aux
+        try:
+            user = os.environ.get("USER", os.getlogin())
+        except OSError:
+            user = "unknown"
+
+        try:
+            result = subprocess.run(
+                ["ps", "aux"],
+                capture_output=True, text=True, timeout=5,
+                env={**os.environ, "LC_ALL": "C"}
+            )
+        except (subprocess.TimeoutExpired, FileNotFoundError):
+            return {"sessions": sessions}
+
+        # ps aux header: USER PID %CPU %MEM VSZ RSS TTY STAT START TIME COMMAND
+        for line in result.stdout.splitlines()[1:]:
+            parts = line.split(None, 10)
+            if len(parts) < 11:
+                continue
+            ps_user, pid_str, _cpu, _mem, _vsz, _rss, tty, stat, start, time_field, command = parts[0], parts[1], parts[2], parts[3], parts[4], parts[5], parts[6], parts[7], parts[8], parts[9], parts[10]
+
+            if ps_user != user:
+                continue
+
+            # Filter to claude processes only (claude binary or node claude)
+            cmd_lower = command.lower()
+            if "claude" not in cmd_lower:
+                continue
+            # Exclude auxiliary processes (MCP servers, node, bash wrappers, etc.)
+            if any(skip in cmd_lower for skip in [
+                "mcp-server", "server.py", "claude-gleaner", "node ", "bridge",
+                "/bin/bash", "cwd",
+            ]):
+                continue
+
+            pid = int(pid_str)
+
+            # Map process state
+            if stat.startswith("T"):
+                state = "stopped"
+            elif stat.startswith("R"):
+                state = "running"
+            else:
+                state = "active"  # S, Sl+, etc.
+
+            # Get cwd
+            cwd = ""
+            try:
+                cwd = os.readlink(f"/proc/{pid}/cwd")
+            except (FileNotFoundError, PermissionError, OSError):
+                pass
+
+            sessions.append({
+                "pid": pid,
+                "state": state,
+                "tty": tty,
+                "started": start,
+                "command": command.split("/")[-1] if "/" in command else command,
+                "cwd": cwd,
+            })
 
     return {"sessions": sessions}
 
@@ -1162,16 +1200,18 @@ def get_session_detail() -> dict:
                             last_timestamp = entry["timestamp"]
                     except Exception:
                         continue
-                # customTitle only exists in type:"custom-title" entries — find via grep
+                # customTitle only exists in type:"custom-title" entries — search Python-native
                 if not custom_title:
                     try:
-                        result = subprocess.run(
-                            ["grep", "-o", '"customTitle":"[^"]*"', str(jsonl_file)],
-                            capture_output=True, text=True, timeout=3
-                        )
-                        if result.stdout.strip():
-                            last_match = result.stdout.strip().splitlines()[-1]
-                            custom_title = last_match.split(':"')[1].rstrip('"')
+                        with open(jsonl_file, "rb") as _f:
+                            _f.seek(0, 2)
+                            _fsize = _f.tell()
+                            _read_size = min(_fsize, 500000)
+                            _f.seek(max(0, _fsize - _read_size))
+                            _chunk = _f.read().decode("utf-8", errors="replace")
+                        _matches = re.findall(r'"customTitle":"([^"]*)"', _chunk)
+                        if _matches:
+                            custom_title = _matches[-1]
                     except Exception:
                         pass
                 slug = custom_title or slug
@@ -1468,16 +1508,18 @@ def get_session_search(query: str = "") -> dict:
                             slug = entry["slug"]
                     except Exception:
                         continue
-                # customTitle only exists in type:"custom-title" entries — find via grep
+                # customTitle only exists in type:"custom-title" entries — search Python-native
                 if not custom_title:
                     try:
-                        result = subprocess.run(
-                            ["grep", "-o", '"customTitle":"[^"]*"', str(jsonl_file)],
-                            capture_output=True, text=True, timeout=3
-                        )
-                        if result.stdout.strip():
-                            last_match = result.stdout.strip().splitlines()[-1]
-                            custom_title = last_match.split(':"')[1].rstrip('"')
+                        with open(jsonl_file, "rb") as _f:
+                            _f.seek(0, 2)
+                            _fsize = _f.tell()
+                            _read_size = min(_fsize, 500000)
+                            _f.seek(max(0, _fsize - _read_size))
+                            _chunk = _f.read().decode("utf-8", errors="replace")
+                        _matches = re.findall(r'"customTitle":"([^"]*)"', _chunk)
+                        if _matches:
+                            custom_title = _matches[-1]
                     except Exception:
                         pass
                 slug = custom_title or slug
@@ -1647,13 +1689,15 @@ def get_alerts() -> dict:
                         continue
                 if not custom_title:
                     try:
-                        result = subprocess.run(
-                            ["grep", "-o", '"customTitle":"[^"]*"', str(jsonl_file)],
-                            capture_output=True, text=True, timeout=3
-                        )
-                        if result.stdout.strip():
-                            last_match = result.stdout.strip().splitlines()[-1]
-                            custom_title = last_match.split(':"')[1].rstrip('"')
+                        with open(jsonl_file, "rb") as _f:
+                            _f.seek(0, 2)
+                            _fsize = _f.tell()
+                            _read_size = min(_fsize, 500000)
+                            _f.seek(max(0, _fsize - _read_size))
+                            _chunk = _f.read().decode("utf-8", errors="replace")
+                        _matches = re.findall(r'"customTitle":"([^"]*)"', _chunk)
+                        if _matches:
+                            custom_title = _matches[-1]
                     except Exception:
                         pass
                 slug = custom_title or slug
