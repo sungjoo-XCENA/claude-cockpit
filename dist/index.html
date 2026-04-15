@@ -1485,9 +1485,8 @@ function renderSessions() {
   const detailMap = {};
   if (state.sessionDetail) {
     for (const sd of state.sessionDetail.sessions || []) {
-      if (sd.is_active && sd.project) {
-        // cwd로 매칭
-        detailMap[sd.project] = sd;
+      if (sd.is_active && sd.pid) {
+        detailMap[sd.pid] = sd;
       }
     }
   }
@@ -1495,8 +1494,7 @@ function renderSessions() {
     const status = s.state || 'stopped';
     const project = (s.cwd || '').split('/').filter(Boolean).pop() || 'unknown';
     const cwd = s.cwd || '';
-    // slug 찾기: sessionDetail에서 cwd 매칭
-    const detail = detailMap[cwd];
+    const detail = detailMap[s.pid];
     const name = detail ? (detail.slug || project) : project;
     return `
       <div class="session-item">
@@ -2178,7 +2176,7 @@ function renderForks() {
   function forkItemHtml(f) {
     const date = f.timestamp ? new Date(f.timestamp).toLocaleDateString('en-US') : '--';
     const sid = f.session || '';
-    const resumeCmd = sid ? `claude --resume --session-id ${sid}` : '';
+    const resumeCmd = sid ? `claude --resume --session-id ${sid} --fork-session` : '';
     return `
       <div class="list-item fork-item" style="cursor:pointer" onclick="copyFork(this,'${esc(resumeCmd)}')">
         <div class="list-item-header">

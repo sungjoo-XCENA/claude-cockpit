@@ -1157,6 +1157,8 @@ def get_session_detail() -> dict:
     active_sessions = get_sessions().get("sessions", [])
     active_pids = {s["pid"] for s in active_sessions if s["state"] != "stopped"}
     active_session_ids = set()
+    sid_to_pid = {}
+    sid_to_name = {}
     sessions_dir = CLAUDE_DIR / "sessions"
     if sessions_dir.is_dir():
         for sf in sessions_dir.glob("*.json"):
@@ -1164,8 +1166,12 @@ def get_session_detail() -> dict:
                 sd = json.loads(read_text(sf) or "{}")
                 pid = sd.get("pid")
                 sid = sd.get("sessionId")
+                name = sd.get("name")
+                if sid and name:
+                    sid_to_name[sid] = name
                 if pid in active_pids and sid:
                     active_session_ids.add(sid)
+                    sid_to_pid[sid] = pid
             except Exception:
                 continue
 
@@ -1214,7 +1220,7 @@ def get_session_detail() -> dict:
                             custom_title = _matches[-1]
                     except Exception:
                         pass
-                slug = custom_title or slug
+                slug = sid_to_name.get(session_id) or custom_title or slug
 
                 # Estimate message count (sample last 500 lines)
                 last_500 = _read_last_n_lines(jsonl_file, 500)
@@ -1282,6 +1288,7 @@ def get_session_detail() -> dict:
                     "last_timestamp": last_timestamp,
                     "is_active": is_active,
                     "fork_count": fork_count,
+                    "pid": sid_to_pid.get(session_id),
                 })
             except Exception:
                 continue
@@ -1483,6 +1490,19 @@ def get_session_search(query: str = "") -> dict:
     if not projects_dir.is_dir():
         return {"results": [], "query": query}
 
+    sid_to_name = {}
+    sessions_dir = CLAUDE_DIR / "sessions"
+    if sessions_dir.is_dir():
+        for sf in sessions_dir.glob("*.json"):
+            try:
+                sd = json.loads(read_text(sf) or "{}")
+                sid = sd.get("sessionId")
+                name = sd.get("name")
+                if sid and name:
+                    sid_to_name[sid] = name
+            except Exception:
+                continue
+
     results = []
 
     for proj_dir in projects_dir.iterdir():
@@ -1522,7 +1542,7 @@ def get_session_search(query: str = "") -> dict:
                             custom_title = _matches[-1]
                     except Exception:
                         pass
-                slug = custom_title or slug
+                slug = sid_to_name.get(session_id) or custom_title or slug
 
                 # Search last 2000 lines
                 lines = _read_last_n_lines(jsonl_file, 2000)
@@ -1651,6 +1671,7 @@ def get_alerts() -> dict:
     active_sessions_data = get_sessions().get("sessions", [])
     active_pids = {s["pid"] for s in active_sessions_data if s.get("state") != "stopped"}
     active_session_ids = set()
+    sid_to_name = {}
     sessions_dir = CLAUDE_DIR / "sessions"
     if sessions_dir.is_dir():
         for sf in sessions_dir.glob("*.json"):
@@ -1658,6 +1679,9 @@ def get_alerts() -> dict:
                 sd = json.loads(read_text(sf) or "{}")
                 pid = sd.get("pid")
                 sid = sd.get("sessionId")
+                name = sd.get("name")
+                if sid and name:
+                    sid_to_name[sid] = name
                 if pid in active_pids and sid:
                     active_session_ids.add(sid)
             except Exception:
@@ -1700,7 +1724,7 @@ def get_alerts() -> dict:
                             custom_title = _matches[-1]
                     except Exception:
                         pass
-                slug = custom_title or slug
+                slug = sid_to_name.get(session_id) or custom_title or slug
                 project_path = decode_project_path(proj_dir.name)
                 project_name = Path(project_path).name or proj_dir.name
                 display_name = (slug or session_id[:16]) + f" ({project_name})"
