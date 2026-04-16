@@ -1066,7 +1066,7 @@ body {
 .burn-stats-row {
   display: flex;
   flex-wrap: wrap;
-  gap: 16px 28px;
+  gap: 16px 36px;
 }
 .burn-stat {
   display: flex;
@@ -2925,8 +2925,6 @@ function renderBurn() {
       '<div class="burn-stat"><span class="burn-stat-value">' + (ov.totalCalls || 0) + '</span><span class="burn-stat-label">API Calls</span></div>' +
       '<div class="burn-stat"><span class="burn-stat-value">' + (ov.totalSessions || 0) + '</span><span class="burn-stat-label">Sessions</span></div>' +
       '<div class="burn-stat"><span class="burn-stat-value">' + (ov.cacheHitPct != null ? ov.cacheHitPct.toFixed(1) + '%' : '--') + '</span><span class="burn-stat-label">Cache Hit</span></div>' +
-    '</div>' +
-    '<div class="burn-stats-row" style="margin-top:10px">' +
       '<div class="burn-stat"><span class="burn-stat-value">' + formatTokens(ov.totalInputTokens) + '</span><span class="burn-stat-label">Input</span></div>' +
       '<div class="burn-stat"><span class="burn-stat-value">' + formatTokens(ov.totalOutputTokens) + '</span><span class="burn-stat-label">Output</span></div>' +
       '<div class="burn-stat"><span class="burn-stat-value">' + formatTokens(ov.totalCacheReadTokens) + '</span><span class="burn-stat-label">Cache Read</span></div>' +
