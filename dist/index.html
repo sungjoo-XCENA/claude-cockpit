@@ -1582,8 +1582,8 @@ function setLiveStatus(connected) {
    RENDER: SUMMARY CARDS
    ============================================================ */
 function renderSummary() {
-  const activeSessions = Array.isArray(state.sessions)
-    ? state.sessions.filter(s => s.state === 'active' || s.state === 'running').length
+  const activeSessions = state.sessionDetail
+    ? (state.sessionDetail.sessions || []).filter(s => s.is_active).length
     : 0;
   document.getElementById('activeSessionCount').textContent = activeSessions;
 
@@ -1673,35 +1673,26 @@ function renderAlerts() {
    ============================================================ */
 function renderSessions() {
   const el = document.getElementById('sessionList');
-  if (!state.sessions || state.sessions.length === 0) {
-    el.innerHTML = '<div class="empty-state">No items</div>';
+  const sessions = state.sessionDetail ? (state.sessionDetail.sessions || []).filter(s => s.is_active) : [];
+  if (sessions.length === 0) {
+    el.innerHTML = '<div class="empty-state">No active sessions</div>';
     return;
   }
-  // sessionDetail에서 slug 매칭
-  const detailMap = {};
-  if (state.sessionDetail) {
-    for (const sd of state.sessionDetail.sessions || []) {
-      if (sd.is_active && sd.pid) {
-        detailMap[sd.pid] = sd;
-      }
-    }
-  }
-  el.innerHTML = state.sessions.map(s => {
-    const status = s.state || 'stopped';
-    const project = (s.cwd || '').split('/').filter(Boolean).pop() || 'unknown';
-    const cwd = s.cwd || '';
-    const detail = detailMap[s.pid];
-    const name = detail ? (detail.slug || project) : project;
+  el.innerHTML = sessions.map(s => {
+    const name = s.slug || 'unnamed';
+    const project = s.project_name || '';
+    const isDocker = s.is_docker;
     return `
       <div class="session-item">
-        <span class="session-dot ${esc(status)}"></span>
+        <span class="session-dot active"></span>
         <div class="session-info">
           <div class="session-main">
             <span class="session-cmd">${esc(name)}</span>
+            ${isDocker ? '<span class="badge" style="font-size:10px;background:#854d0e;color:#fbbf24">🐳 Docker</span>' : ''}
             <span class="badge" style="font-size:10px;opacity:0.6">${esc(project)}</span>
-            <span class="badge ${status === 'active' || status === 'running' ? 'green' : ''}" style="font-size:10px">${esc(status)}</span>
+            <span class="badge green" style="font-size:10px">active</span>
           </div>
-          <div class="session-meta">Started ${esc(s.started || '--')} &middot; ${esc(truncate(cwd, 50))}</div>
+          <div class="session-meta">${s.last_message ? '"' + esc(truncate(s.last_message, 60)) + '"' : esc(s.project || '')}</div>
         </div>
       </div>`;
   }).join('');
@@ -2562,6 +2553,7 @@ function renderSessionMonitor() {
               <span style="color:var(--green);font-size:14px">&#9679;</span>
               <span style="font-size:14px;font-weight:600;color:var(--text-primary)">${esc(name)}</span>
               <span class="badge green" style="font-size:10px">active</span>
+              ${s.is_docker ? '<span class="badge" style="font-size:10px;background:#854d0e;color:#fbbf24">🐳 Docker</span>' : ''}
             </div>
             <div style="font-size:12px;color:var(--text-secondary);margin-top:6px">
               CWD: <span style="font-family:var(--font-mono);font-size:11px">${esc(s.project || '')}</span>
@@ -2591,6 +2583,7 @@ function renderSessionMonitor() {
           <div class="history-session-card" onclick="copyFork(this,'${esc(resumeCmd)}')">
             <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
               <span style="font-size:13px;font-weight:600;color:var(--text-primary)">${esc(name)}</span>
+              ${s.is_docker ? '<span class="badge" style="font-size:10px;background:#854d0e;color:#fbbf24">🐳 Docker</span>' : ''}
               <span class="badge" style="font-size:10px;opacity:0.6">${esc(s.project_name || '')}</span>
               <span style="font-size:11px;color:var(--text-muted)">${esc(age)}</span>
               <span class="badge" style="font-size:10px;cursor:pointer;opacity:0.5;margin-left:auto;color:var(--red)" onclick="event.stopPropagation();deleteSession('${esc(s.session_id)}')">🗑 Delete</span>

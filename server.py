@@ -143,10 +143,30 @@ def _sync_docker_sessions() -> Path:
                 capture_output=True, timeout=10
             )
 
+            # Check if claude is running inside the container
+            active_sids = set()
+            try:
+                pgrep = subprocess.run(
+                    ["docker", "exec", cid, "sh", "-c", "pgrep -f claude 2>/dev/null || true"],
+                    capture_output=True, text=True, timeout=5
+                )
+                docker_pids = {int(p.strip()) for p in pgrep.stdout.splitlines() if p.strip().isdigit()}
+                if docker_pids and sessions_dest.is_dir():
+                    for sf in sessions_dest.glob("*.json"):
+                        try:
+                            sd = json.loads(read_text(sf) or "{}")
+                            if sd.get("pid") in docker_pids and sd.get("sessionId"):
+                                active_sids.add(sd["sessionId"])
+                        except Exception:
+                            continue
+            except Exception:
+                pass
+
             _docker_container_info[short_id] = {
                 "name": container_name,
                 "projects_path": str(projects_dest),
                 "sessions_path": str(sessions_dest),
+                "active_session_ids": active_sids,
             }
         except Exception:
             continue
@@ -1455,7 +1475,7 @@ def get_session_detail() -> dict:
                         file_size_kb = round(file_size / 1024, 1)
 
                         decoded_path = decode_project_path(proj_dir.name)
-                        project_name = f"\U0001f433 {info['name']}: {Path(decoded_path).name or proj_dir.name}"
+                        project_name = info['name']
 
                         # Extract slug
                         last_5 = _read_last_n_lines(jsonl_file, 5)
@@ -1536,7 +1556,7 @@ def get_session_detail() -> dict:
                             "first_message": first_message,
                             "last_message": last_message,
                             "last_timestamp": last_timestamp,
-                            "is_active": False,  # Can't detect active state from docker cp
+                            "is_active": session_id in info.get("active_session_ids", set()),
                             "fork_count": fork_count,
                             "pid": None,
                             "is_docker": True,
@@ -1547,7 +1567,20 @@ def get_session_detail() -> dict:
         pass
 
     # Sort: active first, then last_timestamp descending
-    sessions.sort(key=lambda x: (not x["is_active"], -(x.get("last_timestamp") or 0) if isinstance(x.get("last_timestamp"), (int,float)) else x.get("last_timestamp", "") or ""), reverse=False)
+    def _sort_ts(s):
+        ts = s.get("last_timestamp", "")
+        if isinstance(ts, (int, float)):
+            return ts
+        if isinstance(ts, str) and ts:
+            # ISO string: parse to epoch for consistent sorting
+            try:
+                from datetime import timezone
+                dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+                return dt.timestamp()
+            except Exception:
+                return 0
+        return 0
+    sessions.sort(key=lambda x: (not x["is_active"], -_sort_ts(x)))
 
     return {"sessions": sessions}
 
@@ -2336,7 +2369,7 @@ def _parse_token_usage(period: str) -> dict:
                     if pd.is_dir():
                         all_proj_dirs.append(pd)
                         decoded = decode_project_path(pd.name)
-                        docker_project_names[str(pd)] = f"\U0001f433 {info['name']}: {Path(decoded).name or pd.name}"
+                        docker_project_names[str(pd)] = info['name']
     except Exception:
         pass
 
