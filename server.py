@@ -41,47 +41,66 @@ SSE_INTERVAL = 5  # seconds
 
 # ─── Docker Session Scanning ─────────────────────────────────────────────────
 
-_DOCKER_CACHE_DIR = Path(tempfile.gettempdir()) / "gleaner-docker-sessions"
+_DOCKER_CACHE_DIR = CLAUDE_DIR / "docker-sessions"
 _DOCKER_CACHE_TTL = 30  # seconds
 _docker_cache_ts: float = 0.0
 _docker_container_info: dict = {}  # container_id -> {"name": ..., "projects_path": ...}
 
 
 def _sync_docker_sessions() -> Path:
-    """Sync ~/.claude/projects from running Docker containers to a local temp dir.
-    Returns the cache directory path. Uses TTL-based caching."""
+    """Sync ~/.claude/projects from running Docker containers to a persistent local dir.
+    Returns the cache directory path. Uses TTL-based caching.
+    Cached data persists even when containers stop."""
     global _docker_cache_ts, _docker_container_info
 
     now = time.time()
     if now - _docker_cache_ts < _DOCKER_CACHE_TTL and _DOCKER_CACHE_DIR.is_dir():
         return _DOCKER_CACHE_DIR
 
+    _DOCKER_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+
+    # Load existing cached containers (persisted from previous syncs)
+    _docker_container_info = {}
+    for cached_dir in _DOCKER_CACHE_DIR.iterdir():
+        if not cached_dir.is_dir() or not cached_dir.name.startswith("docker-"):
+            continue
+        meta_file = cached_dir / "meta.json"
+        if meta_file.is_file():
+            try:
+                meta = json.loads(read_text(meta_file) or "{}")
+                short_id = cached_dir.name.replace("docker-", "")
+                _docker_container_info[short_id] = {
+                    "name": meta.get("name", short_id),
+                    "projects_path": str(cached_dir / "projects"),
+                    "sessions_path": str(cached_dir / "sessions"),
+                    "history_path": str(cached_dir / "history.jsonl"),
+                    "claude_md_path": str(cached_dir / "CLAUDE.md"),
+                    "active_session_ids": set(),  # offline by default
+                    "is_running": False,
+                }
+            except Exception:
+                continue
+
     # Check if docker is available
+    running_ids = set()
     try:
         result = subprocess.run(
             ["docker", "ps", "-q"],
             capture_output=True, text=True, timeout=5
         )
-        if result.returncode != 0:
-            return _DOCKER_CACHE_DIR
-        container_ids = [cid.strip() for cid in result.stdout.splitlines() if cid.strip()]
+        if result.returncode == 0:
+            running_ids = {cid.strip()[:12] for cid in result.stdout.splitlines() if cid.strip()}
     except (subprocess.TimeoutExpired, FileNotFoundError):
-        return _DOCKER_CACHE_DIR
+        pass
 
-    if not container_ids:
-        _docker_cache_ts = now
-        return _DOCKER_CACHE_DIR
-
-    _DOCKER_CACHE_DIR.mkdir(parents=True, exist_ok=True)
-    _docker_container_info = {}
-
-    for cid in container_ids:
-        short_id = cid[:12]
+    # Sync running containers
+    for cid_full in running_ids:
+        short_id = cid_full[:12]
 
         # Get container name
         try:
             name_result = subprocess.run(
-                ["docker", "inspect", "--format", "{{.Name}}", cid],
+                ["docker", "inspect", "--format", "{{.Name}}", cid_full],
                 capture_output=True, text=True, timeout=5
             )
             container_name = name_result.stdout.strip().lstrip("/") if name_result.returncode == 0 else short_id
@@ -94,10 +113,9 @@ def _sync_docker_sessions() -> Path:
 
         for path_pattern in claude_paths:
             try:
-                # For wildcard, use shell expansion inside container
                 if "*" in path_pattern:
                     check = subprocess.run(
-                        ["docker", "exec", cid, "sh", "-c", f"ls -d {path_pattern} 2>/dev/null | head -1"],
+                        ["docker", "exec", cid_full, "sh", "-c", f"ls -d {path_pattern} 2>/dev/null | head -1"],
                         capture_output=True, text=True, timeout=5
                     )
                     if check.returncode == 0 and check.stdout.strip():
@@ -105,7 +123,7 @@ def _sync_docker_sessions() -> Path:
                         break
                 else:
                     check = subprocess.run(
-                        ["docker", "exec", cid, "test", "-d", path_pattern],
+                        ["docker", "exec", cid_full, "test", "-d", path_pattern],
                         capture_output=True, text=True, timeout=5
                     )
                     if check.returncode == 0:
@@ -117,37 +135,33 @@ def _sync_docker_sessions() -> Path:
         if not found_path:
             continue
 
-        # Also check for sessions dir (for session name resolution)
-        sessions_path = str(Path(found_path).parent / "sessions")
+        claude_root = Path(found_path).parent
+        sessions_path = str(claude_root / "sessions")
 
-        # docker cp the projects directory
         dest = _DOCKER_CACHE_DIR / f"docker-{short_id}"
         projects_dest = dest / "projects"
         sessions_dest = dest / "sessions"
 
         try:
-            # Remove old cache for this container
             if dest.is_dir():
                 shutil.rmtree(dest)
             dest.mkdir(parents=True, exist_ok=True)
 
-            # Copy projects
-            subprocess.run(
-                ["docker", "cp", f"{cid}:{found_path}", str(projects_dest)],
-                capture_output=True, timeout=30
-            )
+            subprocess.run(["docker", "cp", f"{cid_full}:{found_path}", str(projects_dest)], capture_output=True, timeout=30)
+            subprocess.run(["docker", "cp", f"{cid_full}:{sessions_path}", str(sessions_dest)], capture_output=True, timeout=10)
+            subprocess.run(["docker", "cp", f"{cid_full}:{claude_root}/history.jsonl", str(dest / "history.jsonl")], capture_output=True, timeout=10)
+            subprocess.run(["docker", "cp", f"{cid_full}:{claude_root}/CLAUDE.md", str(dest / "CLAUDE.md")], capture_output=True, timeout=10)
 
-            # Copy sessions dir (for name resolution)
-            subprocess.run(
-                ["docker", "cp", f"{cid}:{sessions_path}", str(sessions_dest)],
-                capture_output=True, timeout=10
-            )
+            # Save metadata for persistence
+            meta = {"name": container_name, "container_id": cid_full}
+            with open(dest / "meta.json", "w") as f:
+                json.dump(meta, f)
 
             # Check if claude is running inside the container
             active_sids = set()
             try:
                 pgrep = subprocess.run(
-                    ["docker", "exec", cid, "sh", "-c", "pgrep -f claude 2>/dev/null || true"],
+                    ["docker", "exec", cid_full, "sh", "-c", "pgrep -f claude 2>/dev/null || true"],
                     capture_output=True, text=True, timeout=5
                 )
                 docker_pids = {int(p.strip()) for p in pgrep.stdout.splitlines() if p.strip().isdigit()}
@@ -166,7 +180,10 @@ def _sync_docker_sessions() -> Path:
                 "name": container_name,
                 "projects_path": str(projects_dest),
                 "sessions_path": str(sessions_dest),
+                "history_path": str(dest / "history.jsonl"),
+                "claude_md_path": str(dest / "CLAUDE.md"),
                 "active_session_ids": active_sids,
+                "is_running": True,
             }
         except Exception:
             continue
@@ -464,47 +481,65 @@ def _truncate(s: str, max_len: int) -> str:
 
 def get_projects_summary() -> dict:
     """Per-project command count / first request / last result based on history.jsonl."""
+    # Collect all history.jsonl files (local + docker)
+    history_files = []
     history_path = CLAUDE_DIR / "history.jsonl"
-    if not history_path.is_file():
+    if history_path.is_file():
+        history_files.append({"path": history_path, "docker_name": None})
+    try:
+        _sync_docker_sessions()
+        for cid, info in _docker_container_info.items():
+            hp = Path(info.get("history_path", ""))
+            if hp.is_file():
+                history_files.append({"path": hp, "docker_name": info["name"]})
+    except Exception:
+        pass
+
+    if not history_files:
         return {"projects": []}
 
     by_project: dict = {}
-    try:
-        text = read_text(history_path)
-        if not text:
-            return {"projects": []}
-
-        for line in text.splitlines()[-5000:]:
-            try:
-                entry = json.loads(line)
-            except Exception:
+    for hf in history_files:
+        try:
+            text = read_text(hf["path"])
+            if not text:
                 continue
-            proj = entry.get("project")
-            ts = entry.get("timestamp")
-            if not proj or not isinstance(ts, (int, float)):
-                continue
-            display = (entry.get("display") or "").strip()
+            docker_name = hf["docker_name"]
 
-            slot = by_project.setdefault(proj, {
-                "name": Path(proj).name or proj,
-                "cwd": proj,
-                "command_count": 0,
-                "last_activity_ms": 0,
-                "first_request": "",
-                "first_ts": 0,
-                "last_result": "",
-            })
-            slot["command_count"] += 1
-            if ts > slot["last_activity_ms"]:
-                slot["last_activity_ms"] = ts
-                if display:
-                    slot["last_result"] = display[:160]
-            if slot["first_ts"] == 0 or ts < slot["first_ts"]:
-                slot["first_ts"] = ts
-                if display:
-                    slot["first_request"] = display[:160]
-    except Exception:
-        pass
+            for line in text.splitlines()[-5000:]:
+                try:
+                    entry = json.loads(line)
+                except Exception:
+                    continue
+                proj = entry.get("project")
+                ts = entry.get("timestamp")
+                if not proj or not isinstance(ts, (int, float)):
+                    continue
+                display = (entry.get("display") or "").strip()
+                proj_key = f"docker:{docker_name}:{proj}" if docker_name else proj
+                proj_display = docker_name or (Path(proj).name or proj)
+
+                slot = by_project.setdefault(proj_key, {
+                    "name": proj_display,
+                    "cwd": proj,
+                    "command_count": 0,
+                    "last_activity_ms": 0,
+                    "first_request": "",
+                    "first_ts": 0,
+                    "last_result": "",
+                    "is_docker": bool(docker_name),
+                })
+                slot["command_count"] += 1
+                if ts > slot["last_activity_ms"]:
+                    slot["last_activity_ms"] = ts
+                    if display:
+                        slot["last_result"] = display[:160]
+                if slot["first_ts"] == 0 or ts < slot["first_ts"]:
+                    slot["first_ts"] = ts
+                    if display:
+                        slot["first_request"] = display[:160]
+        except Exception:
+            continue
 
     now_ms = int(time.time() * 1000)
     result = []
@@ -619,6 +654,28 @@ def get_instructions() -> dict:
                         })
                 except (PermissionError, OSError):
                     pass
+
+    # Docker container CLAUDE.md files
+    try:
+        _sync_docker_sessions()
+        for cid, info in _docker_container_info.items():
+            md_path = Path(info.get("claude_md_path", ""))
+            if md_path.is_file():
+                content = read_text(md_path)
+                if content:
+                    size = md_path.stat().st_size
+                    line_count = content.count("\n") + (1 if content and not content.endswith("\n") else 0)
+                    truncated = len(content) > max_content
+                    result["projects"].append({
+                        "path": info["name"],
+                        "content": content[:max_content],
+                        "size": size,
+                        "line_count": line_count,
+                        "truncated": truncated,
+                        "is_docker": True,
+                    })
+    except Exception:
+        pass
 
     return result
 
@@ -1018,12 +1075,29 @@ def get_forks() -> dict:
     """Search for fork points (branches) in JSONL session files."""
     forks = []
     projects_dir = CLAUDE_DIR / "projects"
-    if not projects_dir.is_dir():
-        return {"forks": [], "total": 0}
 
     seen_texts = set()
 
-    for proj_dir in projects_dir.iterdir():
+    # Collect all project dirs (local + docker)
+    all_proj_dirs = []
+    _docker_proj_names = {}
+    if projects_dir.is_dir():
+        for pd in projects_dir.iterdir():
+            if pd.is_dir():
+                all_proj_dirs.append(pd)
+    try:
+        _sync_docker_sessions()
+        for cid, info in _docker_container_info.items():
+            dp = Path(info["projects_path"])
+            if dp.is_dir():
+                for pd in dp.iterdir():
+                    if pd.is_dir():
+                        all_proj_dirs.append(pd)
+                        _docker_proj_names[str(pd)] = info["name"]
+    except Exception:
+        pass
+
+    for proj_dir in all_proj_dirs:
         if not proj_dir.is_dir():
             continue
         for jsonl_file in proj_dir.glob("*.jsonl"):
@@ -1055,7 +1129,7 @@ def get_forks() -> dict:
                         parent_to_children.setdefault(parent_uuid, []).append(entry)
 
                 # Find fork points: parents with 2 or more children
-                project_name = decode_project_path(proj_dir.name)
+                project_name = _docker_proj_names.get(str(proj_dir)) or decode_project_path(proj_dir.name)
                 session_id = jsonl_file.stem
 
                 for parent_uuid, children in parent_to_children.items():
@@ -2075,29 +2149,35 @@ def get_alerts() -> dict:
 # ─── Token Usage (ported from codeburn) ───────────────────────────────────────
 
 FALLBACK_PRICING: dict[str, dict] = {
+    "claude-opus-4-7": {"input": 5e-6, "output": 25e-6, "cache_write": 6.25e-6, "cache_read": 0.5e-6, "web_search": 0.01, "fast_mult": 6},
     "claude-opus-4-6": {"input": 5e-6, "output": 25e-6, "cache_write": 6.25e-6, "cache_read": 0.5e-6, "web_search": 0.01, "fast_mult": 6},
     "claude-opus-4-5": {"input": 5e-6, "output": 25e-6, "cache_write": 6.25e-6, "cache_read": 0.5e-6, "web_search": 0.01, "fast_mult": 1},
     "claude-opus-4-1": {"input": 15e-6, "output": 75e-6, "cache_write": 18.75e-6, "cache_read": 1.5e-6, "web_search": 0.01, "fast_mult": 1},
     "claude-opus-4": {"input": 15e-6, "output": 75e-6, "cache_write": 18.75e-6, "cache_read": 1.5e-6, "web_search": 0.01, "fast_mult": 1},
+    "claude-sonnet-4-7": {"input": 3e-6, "output": 15e-6, "cache_write": 3.75e-6, "cache_read": 0.3e-6, "web_search": 0.01, "fast_mult": 1},
     "claude-sonnet-4-6": {"input": 3e-6, "output": 15e-6, "cache_write": 3.75e-6, "cache_read": 0.3e-6, "web_search": 0.01, "fast_mult": 1},
     "claude-sonnet-4-5": {"input": 3e-6, "output": 15e-6, "cache_write": 3.75e-6, "cache_read": 0.3e-6, "web_search": 0.01, "fast_mult": 1},
     "claude-sonnet-4": {"input": 3e-6, "output": 15e-6, "cache_write": 3.75e-6, "cache_read": 0.3e-6, "web_search": 0.01, "fast_mult": 1},
     "claude-3-7-sonnet": {"input": 3e-6, "output": 15e-6, "cache_write": 3.75e-6, "cache_read": 0.3e-6, "web_search": 0.01, "fast_mult": 1},
     "claude-3-5-sonnet": {"input": 3e-6, "output": 15e-6, "cache_write": 3.75e-6, "cache_read": 0.3e-6, "web_search": 0.01, "fast_mult": 1},
+    "claude-haiku-4-7": {"input": 1e-6, "output": 5e-6, "cache_write": 1.25e-6, "cache_read": 0.1e-6, "web_search": 0.01, "fast_mult": 1},
     "claude-haiku-4-5": {"input": 1e-6, "output": 5e-6, "cache_write": 1.25e-6, "cache_read": 0.1e-6, "web_search": 0.01, "fast_mult": 1},
     "claude-3-5-haiku": {"input": 0.8e-6, "output": 4e-6, "cache_write": 1e-6, "cache_read": 0.08e-6, "web_search": 0.01, "fast_mult": 1},
 }
 
 _SHORT_MODEL_NAMES: dict[str, str] = {
+    "claude-opus-4-7": "Opus 4.7",
     "claude-opus-4-6": "Opus 4.6",
     "claude-opus-4-5": "Opus 4.5",
     "claude-opus-4-1": "Opus 4.1",
     "claude-opus-4": "Opus 4",
+    "claude-sonnet-4-7": "Sonnet 4.7",
     "claude-sonnet-4-6": "Sonnet 4.6",
     "claude-sonnet-4-5": "Sonnet 4.5",
     "claude-sonnet-4": "Sonnet 4",
     "claude-3-7-sonnet": "Sonnet 3.7",
     "claude-3-5-sonnet": "Sonnet 3.5",
+    "claude-haiku-4-7": "Haiku 4.7",
     "claude-haiku-4-5": "Haiku 4.5",
     "claude-3-5-haiku": "Haiku 3.5",
 }
@@ -2140,18 +2220,26 @@ _CATEGORY_LABELS: dict[str, str] = {
 
 
 def _get_model_costs(model: str) -> Optional[dict]:
-    """Strip date suffix and match against FALLBACK_PRICING with prefix matching."""
+    """Strip date suffix and match against FALLBACK_PRICING with prefix matching.
+    For unknown new models, falls back to latest known pricing of the same tier."""
     canonical = re.sub(r"-\d{8}$", "", model)
     # Exact match
     if canonical in FALLBACK_PRICING:
         return FALLBACK_PRICING[canonical]
-    # Prefix match
+    # Prefix match (e.g., "claude-opus-4-6-20260415" matches "claude-opus-4-6")
     for key, costs in FALLBACK_PRICING.items():
-        if canonical.startswith(key + "-") or canonical == key:
+        if canonical.startswith(key + "-"):
             return costs
-    for key, costs in FALLBACK_PRICING.items():
-        if canonical.startswith(key):
-            return costs
+    # Tier fallback: find latest known model in same tier (opus/sonnet/haiku)
+    m = re.match(r"^claude-(opus|sonnet|haiku)", canonical) \
+        or re.match(r"^claude-\d+-\d+-(opus|sonnet|haiku)", canonical)
+    if m:
+        tier = m.group(1)
+        # Pick the first FALLBACK_PRICING entry whose key contains this tier
+        # (dict insertion order = newest first by convention)
+        for key, costs in FALLBACK_PRICING.items():
+            if tier in key:
+                return costs
     return None
 
 
@@ -2173,11 +2261,24 @@ def _calculate_cost(model: str, input_tokens: int, output_tokens: int,
 
 
 def _get_short_model_name(model: str) -> str:
-    """Map full model name to display name like 'Opus 4.6'."""
+    """Map full model name to display name like 'Opus 4.6'.
+    Falls back to auto-extraction for unknown future models."""
     canonical = re.sub(r"-\d{8}$", "", model)
+    # Exact/prefix match against known table first
     for key, name in _SHORT_MODEL_NAMES.items():
         if canonical.startswith(key):
             return name
+    # Auto-extract: "claude-opus-4-7" → "Opus 4.7", "claude-3-5-sonnet" → "Sonnet 3.5"
+    # Pattern A: claude-{tier}-{major}-{minor}  (e.g. claude-opus-4-7)
+    m = re.match(r"^claude-(opus|sonnet|haiku)-(\d+)(?:-(\d+))?", canonical)
+    if m:
+        tier, major, minor = m.group(1), m.group(2), m.group(3)
+        version = f"{major}.{minor}" if minor else major
+        return f"{tier.capitalize()} {version}"
+    # Pattern B: claude-{major}-{minor}-{tier}  (e.g. claude-3-5-sonnet)
+    m = re.match(r"^claude-(\d+)-(\d+)-(opus|sonnet|haiku)", canonical)
+    if m:
+        return f"{m.group(3).capitalize()} {m.group(1)}.{m.group(2)}"
     return canonical
 
 
