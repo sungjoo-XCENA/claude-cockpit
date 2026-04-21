@@ -3217,7 +3217,7 @@ function openTransferModal(sessionId, sourcePath, displayName) {
     <label style="display:block;font-size:12px;font-weight:600;margin-bottom:4px">Target project path <span style="font-weight:400;color:var(--text-muted)">(optional)</span></label>
     <input id="transferTargetPath" type="text" placeholder="${esc(sourcePath || '/home/user/repo')}" autocomplete="off" spellcheck="false"
       style="width:100%;padding:8px 10px;border:1px solid var(--border);border-radius:6px;background:var(--bg);color:var(--text-primary);font-size:13px;margin-bottom:4px;font-family:var(--font-mono,monospace);box-sizing:border-box" />
-    <div style="font-size:11px;color:var(--text-muted);margin-bottom:14px">비워두면 소스와 같은 경로. 대상 서버에 그 경로가 없으면 자동으로 <code style="background:var(--border);padding:1px 4px;border-radius:3px">mkdir -p</code>로 만들어집니다. 빈 디렉토리라도 resume은 됩니다 — 대화 context는 세션 파일에 담겨 있어요.</div>
+    <div style="font-size:11px;color:var(--text-muted);margin-bottom:14px">비워두면 소스와 같은 경로. 대상 서버에 없으면 자동으로 <code style="background:var(--border);padding:1px 4px;border-radius:3px">mkdir -p</code>로 만들어집니다. 다만 대화 중 참조했던 소스 파일들(<code style="background:var(--border);padding:1px 4px;border-radius:3px">git clone</code> 등)이 대상에 있어야 과거 diff 렌더링 시 claude가 안 터집니다.</div>
 
     <div id="transferStatus" style="margin-bottom:10px"></div>
 
